@@ -1,9 +1,9 @@
-# SchoolBell — programmable school bell on ESP32
+# Bell timer – programmable school bell on ESP32
 
-SchoolBell is a standalone school bell timer. The ESP32 keeps a bell schedule in
-flash, switches a relay at the configured times and creates its own Wi-Fi access
-point. An Android app joins that access point and controls the device over HTTP.
-No router, internet connection or NTP server is required.
+Bell timer is a standalone school bell controller. The ESP32 keeps a bell
+schedule in flash, switches a relay at the configured times and creates its own
+Wi-Fi access point. An Android app joins that access point and controls the
+device over HTTP. No router, internet connection or NTP server is required.
 
 ## Repository layout
 
@@ -148,6 +148,40 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 The APK is produced at
 `android/app/build/outputs/apk/debug/app-debug.apk`.
+
+### App version
+
+`versionName` and `versionCode` default to `1.0.0` and `1`. Override them for a
+single build through Gradle properties:
+
+```bash
+cd android
+./gradlew assembleDebug -PappVersionName=1.2.0 -PappVersionCode=10200
+```
+
+### Release workflow (GitHub Actions)
+
+`.github/workflows/android-release.yml` is manual only (`workflow_dispatch`), so
+it never runs on pushes. Start it from the Actions tab or with `gh`:
+
+```bash
+gh workflow run android-release.yml -f version=1.2.0
+gh workflow run android-release.yml -f version=1.2.0 -f version_code=10200 -f prerelease=true
+```
+
+| Input | Required | Meaning |
+| --- | --- | --- |
+| `version` | yes | `1.2.3` or `v1.2.3`; used as `versionName` and tag `v1.2.3` |
+| `version_code` | no | integer `versionCode`; defaults to `major*10000 + minor*100 + patch` |
+| `prerelease` | no | mark the GitHub release as a pre-release |
+| `draft` | no | create the GitHub release as a draft |
+
+The workflow installs JDK 17 plus the Android SDK packages, builds
+`assembleDebug` with the requested version, uploads the APK as a workflow
+artifact, and publishes `bell-timer-v<version>.apk` with a `.sha256` checksum on
+the GitHub release tagged `v<version>`. Re-running the workflow for an existing
+tag replaces the attached assets. The APK is debug-signed (installable on any
+phone); add a release keystore if you need a Play-style signed build.
 
 ## Using the device
 
