@@ -577,7 +577,7 @@ void updateLed() {
   uint32_t nowMs = millis();
 
   if (ringing) {
-    setLed(true, true);
+    setLed(true, false);
     return;
   }
 
