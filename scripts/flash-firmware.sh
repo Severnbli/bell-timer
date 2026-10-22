@@ -76,15 +76,50 @@ reset_config() {
     fi
     return "${status}"
 }
+
+# Picks the serial port when --port/PORT is omitted. A single ESP32 wins over a
+# single other board; anything ambiguous asks for an explicit --port.
+detect_port() {
+    local line port
+    local -a ports=() esp_ports=()
+
+    while IFS= read -r line; do
+        read -r port _ <<< "${line}"
+        [[ "${port}" == /dev/* ]] || continue
+        case " ${ports[*]-} " in
+            *" ${port} "*) continue ;;
+        esac
+        ports+=("${port}")
+        if [[ "${line,,}" == *esp32* ]]; then
+            esp_ports+=("${port}")
+        fi
+    done < <(arduino-cli board list 2>/dev/null | tail -n +2)
+
+    if (( ${#esp_ports[@]} == 1 )); then
+        printf '%s\n' "${esp_ports[0]}"
+        return 0
+    fi
+    if (( ${#ports[@]} == 1 )); then
+        printf '%s\n' "${ports[0]}"
+        return 0
+    fi
+    if (( ${#ports[@]} == 0 )); then
+        echo "ERROR: no serial port found. Connect the ESP32 and retry." >&2
+    else
+        echo "ERROR: several boards found (${ports[*]}); pass --port." >&2
+    fi
+    return 1
+}
+
+if [[ -z "${PORT}" ]]; then
+    PORT="$(detect_port)" || exit 1
+fi
 trap reset_config EXIT
 
 "${SCRIPT_DIR}/build-firmware.sh" "${COMPILE_ARGS[@]}"
 
-UPLOAD_ARGS=(--fqbn "${FQBN}")
-if [[ -n "${PORT}" ]]; then
-    UPLOAD_ARGS+=(-p "${PORT}")
-fi
+UPLOAD_ARGS=(--fqbn "${FQBN}" -p "${PORT}")
 
-echo "Uploading firmware to ${PORT:-the detected board}..."
+echo "Uploading firmware to ${PORT}..."
 arduino-cli upload "${UPLOAD_ARGS[@]}" "${SKETCH_DIR}"
 echo "Firmware flashed successfully."
