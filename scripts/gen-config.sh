@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Loads the firmware settings from .env and renders them into
-# firmware/SchoolBell/app_config.h for the sketch to include.
+# firmware/BellTimer/app_config.h for the sketch to include.
 #
 # Usage:
 #   scripts/gen-config.sh [env-file]
@@ -8,7 +8,7 @@
 # Environment overrides:
 #   ENV_FILE       settings file to read (default: <repo>/.env)
 #   CONFIG_HEADER  header to write
-#                  (default: <repo>/firmware/SchoolBell/app_config.h)
+#                  (default: <repo>/firmware/BellTimer/app_config.h)
 #
 # The ESP32 cannot read files from the build machine, so the values are baked
 # into a generated header at build time.
@@ -18,7 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 ENV_EXAMPLE="${REPO_ROOT}/.env.example"
 ENV_FILE="${ENV_FILE:-${REPO_ROOT}/.env}"
-CONFIG_HEADER="${CONFIG_HEADER:-${REPO_ROOT}/firmware/SchoolBell/app_config.h}"
+CONFIG_HEADER="${CONFIG_HEADER:-${REPO_ROOT}/firmware/BellTimer/app_config.h}"
 
 fail() {
     echo "ERROR: $*" >&2
@@ -112,7 +112,7 @@ check_flash_pin() {
 }
 
 write_config() {
-    local ap_ssid="${AP_SSID-SchoolBell}"
+    local ap_ssid="${AP_SSID-BellTimer}"
     local ap_password="${AP_PASSWORD-bell12345}"
     local api_token="${API_TOKEN-}"
     local ap_channel="${AP_CHANNEL-6}"
@@ -156,18 +156,18 @@ write_config() {
         echo '// Regenerate with: scripts/gen-config.sh'
         echo '#pragma once'
         echo
-        echo "#define SCHOOLBELL_AP_SSID \"$(c_escape "${ap_ssid}")\""
-        echo "#define SCHOOLBELL_AP_PASSWORD \"$(c_escape "${ap_password}")\""
-        echo "#define SCHOOLBELL_API_TOKEN \"$(c_escape "${api_token}")\""
-        echo "#define SCHOOLBELL_AP_CHANNEL ${ap_channel}"
-        echo "#define SCHOOLBELL_AP_MAX_CLIENTS ${ap_clients}"
+        echo "#define BELLTIMER_AP_SSID \"$(c_escape "${ap_ssid}")\""
+        echo "#define BELLTIMER_AP_PASSWORD \"$(c_escape "${ap_password}")\""
+        echo "#define BELLTIMER_API_TOKEN \"$(c_escape "${api_token}")\""
+        echo "#define BELLTIMER_AP_CHANNEL ${ap_channel}"
+        echo "#define BELLTIMER_AP_MAX_CLIENTS ${ap_clients}"
         echo
-        echo "#define SCHOOLBELL_PIN_RELAY ${pin_relay}"
-        echo "#define SCHOOLBELL_PIN_LED_GREEN ${pin_led_green}"
-        echo "#define SCHOOLBELL_PIN_LED_RED ${pin_led_red}"
-        echo "#define SCHOOLBELL_PIN_I2C_SDA ${pin_i2c_sda}"
-        echo "#define SCHOOLBELL_PIN_I2C_SCL ${pin_i2c_scl}"
-        echo "#define SCHOOLBELL_LED_ACTIVE_LOW ${led_active_low}"
+        echo "#define BELLTIMER_PIN_RELAY ${pin_relay}"
+        echo "#define BELLTIMER_PIN_LED_GREEN ${pin_led_green}"
+        echo "#define BELLTIMER_PIN_LED_RED ${pin_led_red}"
+        echo "#define BELLTIMER_PIN_I2C_SDA ${pin_i2c_sda}"
+        echo "#define BELLTIMER_PIN_I2C_SCL ${pin_i2c_scl}"
+        echo "#define BELLTIMER_LED_ACTIVE_LOW ${led_active_low}"
     } > "${tmp}"
 
     if [[ -f "${CONFIG_HEADER}" ]] && cmp -s "${tmp}" "${CONFIG_HEADER}"; then

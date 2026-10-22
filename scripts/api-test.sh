@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Exercises every SchoolBell HTTP endpoint against a running device.
+# Exercises every BellTimer HTTP endpoint against a running device.
 #
 # Usage:
 #   scripts/api-test.sh [base-url]
@@ -111,7 +111,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "Testing SchoolBell at ${BASE_URL}"
+echo "Testing BellTimer at ${BASE_URL}"
 if [[ -n "${TOKEN}" ]]; then
     echo "Using X-Token from the environment."
 fi
@@ -270,7 +270,7 @@ expect_contains "${WORK_DIR}/settings_invalid.json" '"error":"invalid_ring_defau
 # --- HTML page and 404 ----------------------------------------------------
 code="$(request GET / "" "${WORK_DIR}/index.html")"
 expect_code 200 "${code}" "GET /" "${WORK_DIR}/index.html"
-expect_contains "${WORK_DIR}/index.html" "SchoolBell" "test page contains app name"
+expect_contains "${WORK_DIR}/index.html" "BellTimer" "test page contains app name"
 
 code="$(request GET /does-not-exist "" "${WORK_DIR}/not_found.json")"
 expect_code 404 "${code}" "GET /does-not-exist" "${WORK_DIR}/not_found.json"

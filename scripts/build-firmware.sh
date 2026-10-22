@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Compiles the SchoolBell ESP32 firmware with the ESP32 Arduino core 3.x.
+# Compiles the BellTimer ESP32 firmware with the ESP32 Arduino core 3.x.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-SKETCH_DIR="${REPO_ROOT}/firmware/SchoolBell"
+SKETCH_DIR="${REPO_ROOT}/firmware/BellTimer"
 FQBN="${FQBN:-esp32:esp32:esp32}"
 
-# Loads .env and renders firmware/SchoolBell/app_config.h.
+# Loads .env and renders firmware/BellTimer/app_config.h.
 CONFIG_SCRIPT="${SCRIPT_DIR}/gen-config.sh"
 
 if [[ ! -x "${CONFIG_SCRIPT}" ]]; then
@@ -39,7 +39,7 @@ if ! arduino-cli lib list | awk '{print $1}' | grep -qx "ArduinoJson"; then
     exit 1
 fi
 
-# Load .env and write firmware/SchoolBell/app_config.h before compiling.
+# Load .env and write firmware/BellTimer/app_config.h before compiling.
 "${CONFIG_SCRIPT}"
 
 echo "Compiling ${SKETCH_DIR} for ${FQBN}..."

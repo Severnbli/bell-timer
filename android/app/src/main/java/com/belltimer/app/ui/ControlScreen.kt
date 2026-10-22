@@ -1,4 +1,4 @@
-package com.schoolbell.app.ui
+package com.belltimer.app.ui
 
 import android.content.Intent
 import android.provider.Settings
@@ -45,10 +45,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.schoolbell.app.AppViewModel
-import com.schoolbell.app.ConnectionState
-import com.schoolbell.app.R
-import com.schoolbell.app.UiState
+import com.belltimer.app.AppViewModel
+import com.belltimer.app.ConnectionState
+import com.belltimer.app.R
+import com.belltimer.app.UiState
 
 @Composable
 fun ControlScreen(state: UiState, viewModel: AppViewModel) {

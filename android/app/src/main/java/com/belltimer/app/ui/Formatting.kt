@@ -1,6 +1,6 @@
-package com.schoolbell.app.ui
+package com.belltimer.app.ui
 
-import com.schoolbell.app.R
+import com.belltimer.app.R
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 

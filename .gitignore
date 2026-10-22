@@ -9,7 +9,7 @@ android/.idea/
 
 # Arduino
 firmware/**/build/
-firmware/SchoolBell/app_config.h
+firmware/BellTimer/app_config.h
 
 # Local firmware configuration (credentials, API token)
 .env

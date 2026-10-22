@@ -1,4 +1,4 @@
-package com.schoolbell.app.data
+package com.belltimer.app.data
 
 import android.content.Context
 import android.net.ConnectivityManager

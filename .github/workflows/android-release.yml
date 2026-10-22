@@ -137,7 +137,7 @@ jobs:
           {
             echo "**Bell timer Android ${VERSION}** (versionCode ${VERSION_CODE})"
             echo
-            echo "Debug-signed APK of the Bell timer control app for the ESP32 school bell."
+            echo "Debug-signed APK of the Bell timer control app for the ESP32 bell timer."
             echo
             echo "Install on the phone:"
             echo

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Школьный звонок</string>
+    <string name="app_name">Bell timer</string>
 
     <string name="tab_control">Управление</string>
     <string name="tab_schedule">Расписание</string>
@@ -44,15 +44,15 @@
     <string name="edit_desc">Изменить</string>
     <string name="delete_desc">Удалить</string>
     <string name="status_entries">Записей в расписании: %1$d</string>
-    <string name="device_offline_hint">Устройство не отвечает. Проверьте, что телефон подключён к Wi-Fi SchoolBell.</string>
+    <string name="device_offline_hint">Устройство не отвечает. Проверьте, что телефон подключён к Wi-Fi BellTimer.</string>
 
     <string name="error_rtc_not_found">Часы DS3231 не найдены</string>
     <string name="error_time_not_set">Время не выставлено</string>
     <string name="error_storage">Ошибка хранилища устройства</string>
     <string name="error_wifi_ap">Не удалось запустить Wi-Fi точку доступа</string>
     <string name="error_unknown_device">Неизвестная ошибка: %1$s</string>
-    <string name="error_no_wifi">Нет подключения к Wi-Fi. Подключитесь к сети SchoolBell.</string>
-    <string name="error_timeout">Устройство не отвечает. Проверьте подключение к Wi-Fi SchoolBell.</string>
+    <string name="error_no_wifi">Нет подключения к Wi-Fi. Подключитесь к сети BellTimer.</string>
+    <string name="error_timeout">Устройство не отвечает. Проверьте подключение к Wi-Fi BellTimer.</string>
     <string name="error_network">Ошибка сети: %1$s</string>
     <string name="error_http">Ошибка устройства (код %1$d)</string>
     <string name="error_invalid_json">Устройство вернуло некорректный ответ.</string>

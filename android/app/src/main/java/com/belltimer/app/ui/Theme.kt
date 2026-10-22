@@ -1,4 +1,4 @@
-package com.schoolbell.app.ui
+package com.belltimer.app.ui
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
@@ -38,7 +38,7 @@ private val DarkColors = darkColorScheme(
 )
 
 @Composable
-fun SchoolBellTheme(content: @Composable () -> Unit) {
+fun BellTimerTheme(content: @Composable () -> Unit) {
     val colors = if (isSystemInDarkTheme()) DarkColors else LightColors
     MaterialTheme(
         colorScheme = colors,

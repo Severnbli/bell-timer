@@ -1,4 +1,4 @@
-// SchoolBell - programmable school bell timer for ESP32.
+// BellTimer - programmable bell timer for ESP32.
 //
 // Hardware:
 //   GPIO21/22 - DS3231 RTC (I2C, address 0x68, stores LOCAL time)
@@ -32,21 +32,21 @@ const char *const FW_VERSION = "1.0.0";
 
 // ----------------------------- Configuration ------------------------------
 
-const char *const AP_SSID = SCHOOLBELL_AP_SSID;
-const char *const AP_PASSWORD = SCHOOLBELL_AP_PASSWORD;
-const char *const API_TOKEN = SCHOOLBELL_API_TOKEN;  // Empty disables X-Token.
-const uint8_t AP_CHANNEL = SCHOOLBELL_AP_CHANNEL;
-const uint8_t AP_MAX_CLIENTS = SCHOOLBELL_AP_MAX_CLIENTS;
+const char *const AP_SSID = BELLTIMER_AP_SSID;
+const char *const AP_PASSWORD = BELLTIMER_AP_PASSWORD;
+const char *const API_TOKEN = BELLTIMER_API_TOKEN;  // Empty disables X-Token.
+const uint8_t AP_CHANNEL = BELLTIMER_AP_CHANNEL;
+const uint8_t AP_MAX_CLIENTS = BELLTIMER_AP_MAX_CLIENTS;
 
-const uint8_t PIN_RELAY = SCHOOLBELL_PIN_RELAY;
-const uint8_t PIN_LED_GREEN = SCHOOLBELL_PIN_LED_GREEN;  // KY-029 "G" pin
-const uint8_t PIN_LED_RED = SCHOOLBELL_PIN_LED_RED;      // KY-029 "R" pin
+const uint8_t PIN_RELAY = BELLTIMER_PIN_RELAY;
+const uint8_t PIN_LED_GREEN = BELLTIMER_PIN_LED_GREEN;  // KY-029 "G" pin
+const uint8_t PIN_LED_RED = BELLTIMER_PIN_LED_RED;      // KY-029 "R" pin
 // The KY-029 exists in a common-cathode and a common-anode variant. With the
 // common pin tied to GND the dies are lit by a HIGH level; with the common pin
 // tied to 3V3 they are lit by a LOW level. See LED_ACTIVE_LOW in .env.
-const bool LED_ACTIVE_LOW = SCHOOLBELL_LED_ACTIVE_LOW;
-const uint8_t PIN_I2C_SDA = SCHOOLBELL_PIN_I2C_SDA;
-const uint8_t PIN_I2C_SCL = SCHOOLBELL_PIN_I2C_SCL;
+const bool LED_ACTIVE_LOW = BELLTIMER_LED_ACTIVE_LOW;
+const uint8_t PIN_I2C_SDA = BELLTIMER_PIN_I2C_SDA;
+const uint8_t PIN_I2C_SCL = BELLTIMER_PIN_I2C_SCL;
 
 const size_t MAX_ENTRIES = 64;
 const size_t MAX_LABEL_BYTES = 45;  // About 15 Cyrillic characters in UTF-8.
@@ -972,14 +972,14 @@ void handleRoot() {
   static const char PAGE[] PROGMEM = R"HTML(<!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SchoolBell</title>
+<title>BellTimer</title>
 <style>
 body{font-family:system-ui,sans-serif;margin:16px;background:#111;color:#eee}
 button{font-size:1rem;padding:8px 14px;margin:4px;border-radius:8px;border:0;background:#3b82f6;color:#fff}
 pre{background:#222;padding:10px;border-radius:8px;white-space:pre-wrap}
 input{width:80px;padding:6px;margin:4px;border-radius:6px;border:1px solid #555;background:#222;color:#eee}
 </style></head><body>
-<h1>SchoolBell</h1>
+<h1>BellTimer</h1>
 <p><b>Статус:</b></p><pre id="status">...</pre>
 <p><input id="sec" type="number" min="1" max="60" value="5">
 <button onclick="ring()">Звонок</button>

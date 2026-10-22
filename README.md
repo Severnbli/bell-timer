@@ -1,6 +1,6 @@
-# Bell timer – programmable school bell on ESP32
+# Bell timer – programmable bell schedule on ESP32
 
-Bell timer is a standalone school bell controller. The ESP32 keeps a bell
+Bell timer is a standalone bell controller. The ESP32 keeps a bell
 schedule in flash, switches a relay at the configured times and creates its own
 Wi-Fi access point. An Android app joins that access point and controls the
 device over HTTP. No router, internet connection or NTP server is required.
@@ -8,9 +8,9 @@ device over HTTP. No router, internet connection or NTP server is required.
 ## Repository layout
 
 ```
-firmware/SchoolBell/SchoolBell.ino   ESP32 firmware (single sketch)
+firmware/BellTimer/BellTimer.ino     ESP32 firmware (single sketch)
 android/                             Android Studio project (Kotlin + Compose)
-scripts/gen-config.sh                .env -> firmware/SchoolBell/app_config.h
+scripts/gen-config.sh                .env -> firmware/BellTimer/app_config.h
 scripts/build-firmware.sh            arduino-cli build helper
 scripts/flash-firmware.sh            build, upload, then reset app_config.h
 scripts/api-test.sh                  curl test for every HTTP endpoint
@@ -98,21 +98,21 @@ scripts/build-firmware.sh
 ```
 
 The build script runs `scripts/gen-config.sh`, which renders `.env` into
-`firmware/SchoolBell/app_config.h`, before calling `arduino-cli`. Both files are
+`firmware/BellTimer/app_config.h`, before calling `arduino-cli`. Both files are
 git-ignored, so the header does not exist in a fresh clone; run the generator
 once before invoking `arduino-cli compile --fqbn esp32:esp32:esp32
-firmware/SchoolBell` directly:
+firmware/BellTimer` directly:
 
 ```bash
 scripts/gen-config.sh
-arduino-cli compile --fqbn esp32:esp32:esp32 firmware/SchoolBell
+arduino-cli compile --fqbn esp32:esp32:esp32 firmware/BellTimer
 ```
 
 The .env is optional: without it the generator falls back to `.env.example` and
 warns. Flash the firmware and open the serial monitor:
 
 ```bash
-arduino-cli upload -p /dev/ttyUSB0 --fqbn esp32:esp32:esp32 firmware/SchoolBell
+arduino-cli upload -p /dev/ttyUSB0 --fqbn esp32:esp32:esp32 firmware/BellTimer
 arduino-cli monitor -p /dev/ttyUSB0 -c baudrate=115200
 ```
 
@@ -124,7 +124,7 @@ Or build, upload and restore the default config in one step:
 
 The serial port is detected automatically (`arduino-cli board list`), so no
 arguments are needed when a single board is connected. The script runs the build
-script, uploads the result and then rewrites `firmware/SchoolBell/app_config.h`
+script, uploads the result and then rewrites `firmware/BellTimer/app_config.h`
 with the defaults from `.env.example`, so your real SSID, password and token are
 not left in the generated header. The next build renders `.env` again.
 
@@ -186,7 +186,7 @@ phone); add a release keystore if you need a Play-style signed build.
 ## Using the device
 
 1. Power the ESP32. With the default configuration it creates the Wi-Fi network
-   **SchoolBell** with password `bell12345`, channel 6, at most 4 clients,
+   **BellTimer** with password `bell12345`, channel 6, at most 4 clients,
    address `192.168.4.1`. Change these values in `.env` and rebuild to customize
    them.
 2. Join that network on the phone. It has no internet access; Android may warn
@@ -203,7 +203,7 @@ phone); add a release keystore if you need a Play-style signed build.
 
 Deployment settings are read from the git-ignored `.env` file in the repository
 root. The ESP32 cannot read host files, so `scripts/gen-config.sh` renders
-`.env` into `firmware/SchoolBell/app_config.h`, which the sketch includes.
+`.env` into `firmware/BellTimer/app_config.h`, which the sketch includes.
 `scripts/build-firmware.sh` invokes the generator automatically:
 
 ```bash
@@ -217,7 +217,7 @@ can safely run before every build.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `AP_SSID` | `SchoolBell` | Access point name, at most 32 bytes |
+| `AP_SSID` | `BellTimer` | Access point name, at most 32 bytes |
 | `AP_PASSWORD` | `bell12345` | WPA2 password, 8..63 characters; empty = open network |
 | `AP_CHANNEL` | `6` | Wi-Fi channel, 1..13 |
 | `AP_MAX_CLIENTS` | `4` | Concurrent clients, 1..8 |
@@ -372,7 +372,7 @@ curl -s -X POST http://192.168.4.1/settings \
 curl -s http://192.168.4.1/
 ```
 
-Open the same URL in a browser while connected to SchoolBell. The page shows
+Open the same URL in a browser while connected to BellTimer. The page shows
 status, has ring/stop/mode buttons and an X-Token input.
 
 ### Error codes
@@ -414,12 +414,12 @@ a slow red blink means *broken*, a steady red means *not ready yet*, and the
 steady red turns itself off as soon as the time is set.
 
 If your KY-029 is the **common-anode** variant (common pin to 3V3 instead of
-GND), set `LED_ACTIVE_LOW = true` in `firmware/SchoolBell/SchoolBell.ino` and
+GND), set `LED_ACTIVE_LOW = true` in `firmware/BellTimer/BellTimer.ino` and
 reflash; nothing else changes.
 
 ## Automated API test
 
-With the PC connected to the SchoolBell Wi-Fi network:
+With the PC connected to the BellTimer Wi-Fi network:
 
 ```bash
 scripts/api-test.sh
@@ -435,7 +435,7 @@ schedule, mode and `ring_default` and restores them on exit.
 
 1. `scripts/build-firmware.sh` succeeds and prints flash/RAM usage.
 2. The serial monitor prints no crash/reboot loop after power-up.
-3. The SchoolBell SSID appears; a phone gets an address in `192.168.4.0/24`.
+3. The BellTimer SSID appears; a phone gets an address in `192.168.4.0/24`.
 4. `curl http://192.168.4.1/status` returns JSON with `"fw":"1.0.0"`.
 5. LED blinks green 1 Hz; disconnecting the RTC shows a fast red blink and
    `rtc_not_found`.
@@ -455,7 +455,7 @@ schedule, mode and `ring_default` and restores them on exit.
 
 ## Implementation notes and assumptions
 
-- The DS3231 stores local time at the school; there is no timezone conversion
+- The DS3231 stores local time; there is no timezone conversion
   and no NTP.
 - The relay module is assumed to be active LOW, as specified. If a different
   module is used, invert `relayOn()`/`relayOff()`.
@@ -467,7 +467,7 @@ schedule, mode and `ring_default` and restores them on exit.
   (`res/xml/network_security_config.xml`). If the base URL is changed to a
   different cleartext host, add that host to the network security config.
 - The Android app binds HTTP calls to the Wi-Fi transport. This avoids mobile
-  data being used when the SchoolBell network has no internet access.
+  data being used when the BellTimer network has no internet access.
 - The app's default ring duration is stored locally and also sent to the device
   as `ring_default`.
 - HTTP is unencrypted and the AP password is a compile-time constant. This is a

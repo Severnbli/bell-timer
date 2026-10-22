@@ -20,5 +20,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "SchoolBell"
+rootProject.name = "BellTimer"
 include(":app")

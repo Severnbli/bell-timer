@@ -1,4 +1,4 @@
-package com.schoolbell.app.ui
+package com.belltimer.app.ui
 
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -18,7 +18,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import com.schoolbell.app.R
+import com.belltimer.app.R
 
 /**
  * Prominent banner shown at the top of a screen when the local edits differ

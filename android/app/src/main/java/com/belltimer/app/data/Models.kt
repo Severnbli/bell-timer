@@ -1,4 +1,4 @@
-package com.schoolbell.app.data
+package com.belltimer.app.data
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable

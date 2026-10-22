@@ -9,11 +9,11 @@
     kotlinx.serialization.KSerializer serializer(...);
 }
 
--keep,includedescriptorclasses class com.schoolbell.app.**$$serializer { *; }
--keepclassmembers class com.schoolbell.app.** {
+-keep,includedescriptorclasses class com.belltimer.app.**$$serializer { *; }
+-keepclassmembers class com.belltimer.app.** {
     *** Companion;
 }
--keepclasseswithmembers class com.schoolbell.app.** {
+-keepclasseswithmembers class com.belltimer.app.** {
     kotlinx.serialization.KSerializer serializer(...);
 }
 

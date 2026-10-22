@@ -1,4 +1,4 @@
-package com.schoolbell.app.data
+package com.belltimer.app.data
 
 import android.content.Context
 import androidx.core.content.edit
@@ -26,7 +26,7 @@ class SettingsStore(context: Context) {
     }
 
     private companion object {
-        const val PREFS_NAME = "schoolbell_settings"
+        const val PREFS_NAME = "belltimer_settings"
         const val KEY_BASE_URL = "base_url"
         const val KEY_TOKEN = "token"
         const val KEY_RING_DEFAULT = "ring_default"

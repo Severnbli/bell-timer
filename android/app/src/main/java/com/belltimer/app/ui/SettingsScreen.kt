@@ -1,4 +1,4 @@
-package com.schoolbell.app.ui
+package com.belltimer.app.ui
 
 import android.content.Intent
 import android.provider.Settings
@@ -35,11 +35,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import com.schoolbell.app.AppViewModel
-import com.schoolbell.app.BuildConfig
-import com.schoolbell.app.R
-import com.schoolbell.app.UiState
-import com.schoolbell.app.data.normalizeBaseUrl
+import com.belltimer.app.AppViewModel
+import com.belltimer.app.BuildConfig
+import com.belltimer.app.R
+import com.belltimer.app.UiState
+import com.belltimer.app.data.normalizeBaseUrl
 
 @Composable
 fun SettingsScreen(state: UiState, viewModel: AppViewModel) {

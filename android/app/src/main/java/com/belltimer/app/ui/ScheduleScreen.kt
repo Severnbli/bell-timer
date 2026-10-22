@@ -1,4 +1,4 @@
-package com.schoolbell.app.ui
+package com.belltimer.app.ui
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
@@ -58,14 +58,14 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.schoolbell.app.AppViewModel
-import com.schoolbell.app.ConnectionState
-import com.schoolbell.app.R
-import com.schoolbell.app.UiState
-import com.schoolbell.app.data.BellEntry
-import com.schoolbell.app.data.MAX_RING_SECONDS
-import com.schoolbell.app.data.MAX_SCHEDULE_ENTRIES
-import com.schoolbell.app.data.MIN_RING_SECONDS
+import com.belltimer.app.AppViewModel
+import com.belltimer.app.ConnectionState
+import com.belltimer.app.R
+import com.belltimer.app.UiState
+import com.belltimer.app.data.BellEntry
+import com.belltimer.app.data.MAX_RING_SECONDS
+import com.belltimer.app.data.MAX_SCHEDULE_ENTRIES
+import com.belltimer.app.data.MIN_RING_SECONDS
 
 @Composable
 fun ScheduleScreen(state: UiState, viewModel: AppViewModel) {

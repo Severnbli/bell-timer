@@ -12,13 +12,13 @@ val appVersionCode: Int =
     (findProperty("appVersionCode") as String?)?.trim()?.toIntOrNull() ?: 1
 
 android {
-    namespace = "com.schoolbell.app"
+    namespace = "com.belltimer.app"
     compileSdk {
         version = release(37)
     }
 
     defaultConfig {
-        applicationId = "com.schoolbell.app"
+        applicationId = "com.belltimer.app"
         minSdk {
             version = release(26)
         }

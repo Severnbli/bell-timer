@@ -1,4 +1,4 @@
-package com.schoolbell.app.ui
+package com.belltimer.app.ui
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
@@ -25,10 +25,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import com.schoolbell.app.R
-import com.schoolbell.app.data.MAX_RING_SECONDS
-import com.schoolbell.app.data.MIN_RING_SECONDS
-import com.schoolbell.app.data.QUICK_RING_SECONDS_MAX
+import com.belltimer.app.R
+import com.belltimer.app.data.MAX_RING_SECONDS
+import com.belltimer.app.data.MIN_RING_SECONDS
+import com.belltimer.app.data.QUICK_RING_SECONDS_MAX
 
 /**
  * Compact bell duration selector: chips for the common 1..10 s range plus a

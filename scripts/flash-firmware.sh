@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds the firmware, uploads it to the ESP32 and then restores the generated
-# firmware/SchoolBell/app_config.h to the default settings from .env.example.
+# firmware/BellTimer/app_config.h to the default settings from .env.example.
 #
 # Usage:
 #   scripts/flash-firmware.sh [--port PORT] [--no-reset] [compile-args...]
@@ -13,7 +13,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-SKETCH_DIR="${REPO_ROOT}/firmware/SchoolBell"
+SKETCH_DIR="${REPO_ROOT}/firmware/BellTimer"
 GEN_CONFIG="${SCRIPT_DIR}/gen-config.sh"
 ENV_EXAMPLE="${REPO_ROOT}/.env.example"
 FQBN="${FQBN:-esp32:esp32:esp32}"
@@ -25,7 +25,7 @@ COMPILE_ARGS=()
 usage() {
     cat <<'EOF'
 Builds the firmware, uploads it to the ESP32 and then restores
-firmware/SchoolBell/app_config.h to the defaults from .env.example.
+firmware/BellTimer/app_config.h to the defaults from .env.example.
 
 Usage:
   scripts/flash-firmware.sh [--port PORT] [--no-reset] [compile-args...]

@@ -1,4 +1,4 @@
-package com.schoolbell.app.ui
+package com.belltimer.app.ui
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
@@ -28,12 +28,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.schoolbell.app.AppViewModel
-import com.schoolbell.app.R
+import com.belltimer.app.AppViewModel
+import com.belltimer.app.R
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SchoolBellApp(viewModel: AppViewModel) {
+fun BellTimerApp(viewModel: AppViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     val snackbarHostState = remember { SnackbarHostState() }
