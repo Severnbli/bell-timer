@@ -10,8 +10,11 @@ No router, internet connection or NTP server is required.
 ```
 firmware/SchoolBell/SchoolBell.ino   ESP32 firmware (single sketch)
 android/                             Android Studio project (Kotlin + Compose)
+scripts/gen-config.sh                .env -> firmware/SchoolBell/app_config.h
 scripts/build-firmware.sh            arduino-cli build helper
+scripts/flash-firmware.sh            build, upload, then reset app_config.h
 scripts/api-test.sh                  curl test for every HTTP endpoint
+.env.example                         template for the firmware configuration
 README.md
 ```
 
@@ -24,7 +27,7 @@ README.md
 | Relay IN | GPIO26 | 5 V relay module with optocoupler, **active LOW** |
 | Status LED green | GPIO27 | KY-029 `G` pin, active HIGH |
 | Status LED red | GPIO25 | KY-029 `R` pin, active HIGH |
-| KY-029 common | GND | Tied to GND = common cathode (`LED_ACTIVE_LOW = false`) |
+| KY-029 common | GND | Tied to GND = common cathode (`LED_ACTIVE_LOW=false` in `.env`) |
 
 The relay is forced OFF at boot: GPIO26 is driven HIGH before it becomes an
 output. There are no buttons or switches. Power the board from USB 5 V.
@@ -85,18 +88,44 @@ Requirements:
 
 ## Build the firmware
 
+Wi-Fi credentials, the API token and the GPIO wiring live in `.env`. Create it
+once from the template and adjust it to your device, then build:
+
 ```bash
+cp .env.example .env    # edit AP_SSID, AP_PASSWORD, API_TOKEN, pins, ...
 scripts/build-firmware.sh
-# or directly:
+```
+
+The build script runs `scripts/gen-config.sh`, which renders `.env` into
+`firmware/SchoolBell/app_config.h`, before calling `arduino-cli`. Both files are
+git-ignored, so the header does not exist in a fresh clone; run the generator
+once before invoking `arduino-cli compile --fqbn esp32:esp32:esp32
+firmware/SchoolBell` directly:
+
+```bash
+scripts/gen-config.sh
 arduino-cli compile --fqbn esp32:esp32:esp32 firmware/SchoolBell
 ```
 
-Flash it and open the serial monitor:
+The .env is optional: without it the generator falls back to `.env.example` and
+warns. Flash the firmware and open the serial monitor:
 
 ```bash
 arduino-cli upload -p /dev/ttyUSB0 --fqbn esp32:esp32:esp32 firmware/SchoolBell
 arduino-cli monitor -p /dev/ttyUSB0 -c baudrate=115200
 ```
+
+Or build, upload and restore the default config in one step:
+
+```bash
+scripts/flash-firmware.sh --port /dev/ttyUSB0
+```
+
+`scripts/flash-firmware.sh` runs the build script, uploads the result and then
+rewrites `firmware/SchoolBell/app_config.h` with the defaults from
+`.env.example`, so your real SSID, password and token are not left in the
+generated header afterwards. The next build renders `.env` again; pass
+`--no-reset` to keep the generated header with your values.
 
 On Linux, the serial port may be `/dev/ttyACM0` or `/dev/ttyUSB0`; the user must
 have permission to access it. Board settings in the IDE: **ESP32 Dev Module**,
@@ -117,8 +146,10 @@ The APK is produced at
 
 ## Using the device
 
-1. Power the ESP32. It creates the Wi-Fi network **SchoolBell** with password
-   `bell12345`, channel 6, at most 4 clients, address `192.168.4.1`.
+1. Power the ESP32. With the default configuration it creates the Wi-Fi network
+   **SchoolBell** with password `bell12345`, channel 6, at most 4 clients,
+   address `192.168.4.1`. Change these values in `.env` and rebuild to customize
+   them.
 2. Join that network on the phone. It has no internet access; Android may warn
    about this and may prefer mobile data. The app binds its HTTP sockets to the
    Wi-Fi network with `Network.socketFactory`, so the device is still reachable.
@@ -129,14 +160,40 @@ The APK is produced at
 5. Choose **Авто** to follow the schedule, or **Ручной** to disable the schedule;
    manual ringing always works.
 
-The firmware SSID, password, channel and optional API token are constants at the
-top of `firmware/SchoolBell/SchoolBell.ino`:
+## Firmware configuration (.env)
 
-```cpp
-const char *const AP_SSID = "SchoolBell";
-const char *const AP_PASSWORD = "bell12345";
-const char *const API_TOKEN = "";  // empty disables X-Token checking
+Deployment settings are read from the git-ignored `.env` file in the repository
+root. The ESP32 cannot read host files, so `scripts/gen-config.sh` renders
+`.env` into `firmware/SchoolBell/app_config.h`, which the sketch includes.
+`scripts/build-firmware.sh` invokes the generator automatically:
+
+```bash
+scripts/gen-config.sh                  # .env -> app_config.h
+scripts/gen-config.sh other.env        # use another settings file
+CONFIG_HEADER=/tmp/app_config.h scripts/gen-config.sh
 ```
+
+The generator only rewrites the header when the rendered content changed, so it
+can safely run before every build.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `AP_SSID` | `SchoolBell` | Access point name, at most 32 bytes |
+| `AP_PASSWORD` | `bell12345` | WPA2 password, 8..63 characters; empty = open network |
+| `AP_CHANNEL` | `6` | Wi-Fi channel, 1..13 |
+| `AP_MAX_CLIENTS` | `4` | Concurrent clients, 1..8 |
+| `API_TOKEN` | empty | Expected `X-Token` value; empty disables authentication |
+| `PIN_RELAY` | `26` | Relay input, active LOW |
+| `PIN_LED_GREEN` | `27` | KY-029 `G` pin |
+| `PIN_LED_RED` | `25` | KY-029 `R` pin |
+| `PIN_I2C_SDA` | `21` | DS3231 SDA |
+| `PIN_I2C_SCL` | `22` | DS3231 SCL |
+| `LED_ACTIVE_LOW` | `false` | `false` = common cathode (common to GND), `true` = common anode (common to 3V3) |
+
+Variables already set in the environment take precedence over `.env`, and
+`scripts/gen-config.sh /path/to/file` (or `ENV_FILE=...`) selects a different
+config file; `CONFIG_HEADER=...` changes the output path. The generator
+validates all values and warns when a pin uses GPIO6..11 (SPI flash).
 
 If `API_TOKEN` is non-empty, every API request (including `GET /`) must send the
 header `X-Token: <value>`. CORS preflight `OPTIONS` requests are exempt because
