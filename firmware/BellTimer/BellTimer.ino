@@ -28,7 +28,7 @@
 
 namespace {
 
-const char *const FW_VERSION = "1.0.0";
+const char *const FW_VERSION = "1.1.0";
 
 // ----------------------------- Configuration ------------------------------
 
@@ -48,11 +48,19 @@ const bool LED_ACTIVE_LOW = BELLTIMER_LED_ACTIVE_LOW;
 const uint8_t PIN_I2C_SDA = BELLTIMER_PIN_I2C_SDA;
 const uint8_t PIN_I2C_SCL = BELLTIMER_PIN_I2C_SCL;
 
-const size_t MAX_ENTRIES = 64;
-const size_t MAX_LABEL_BYTES = 45;  // About 15 Cyrillic characters in UTF-8.
+// A schedule is a set of named groups. Every group owns a list of bells and
+// repeats on the weekdays selected for the group. Date exceptions can mute a
+// day or point it at another group. Auto mode can be limited to a date range.
+// The limits below are mirrored by the Android app (data/Models.kt).
+const size_t MAX_ENTRIES = 256;        // bells across all groups
+const size_t MAX_GROUPS = 12;          // named schedule groups
+const size_t MAX_EXCEPTIONS = 64;      // per-date overrides
+const size_t MAX_LABEL_BYTES = 45;     // About 15 Cyrillic characters in UTF-8.
+const size_t MAX_GROUP_NAME_BYTES = 32;
 const uint8_t MIN_RING_SEC = 1;
 const uint8_t MAX_RING_SEC = 60;
 const uint8_t DEFAULT_RING_SEC = 5;
+const uint8_t ALL_DAYS_MASK = 0x7F;    // bit 0 = Monday ... bit 6 = Sunday
 
 const char *const SCHEDULE_FILE = "/schedule.json";
 const char *const SETTINGS_FILE = "/settings.json";
@@ -67,9 +75,22 @@ const uint32_t AP_IP_CHECK_MS = 5000;
 
 struct ScheduleEntry {
   uint16_t minuteOfDay = 0;  // 0..1439
-  uint8_t daysMask = 0;      // bit 0 = Monday ... bit 6 = Sunday
+  uint8_t daysMask = ALL_DAYS_MASK;
   uint8_t duration = DEFAULT_RING_SEC;
+  uint8_t groupId = 0;  // id of the owning group
   String label;
+};
+
+struct ScheduleGroup {
+  uint8_t id = 0;
+  uint8_t daysMask = ALL_DAYS_MASK;
+  String name;
+};
+
+struct DateException {
+  uint32_t dateKey = 0;  // YYYYMMDD
+  bool mute = false;     // true: no bells on this date
+  uint8_t groupId = 0;   // 0: not overridden
 };
 
 // ------------------------------- State ------------------------------------
@@ -87,6 +108,27 @@ String currentMode = "auto";
 
 ScheduleEntry entries[MAX_ENTRIES];
 size_t entryCount = 0;
+
+ScheduleGroup groups[MAX_GROUPS];
+size_t groupCount = 0;
+
+DateException exceptions[MAX_EXCEPTIONS];
+size_t exceptionCount = 0;
+
+// Auto mode date range. A zero key means "no limit".
+uint32_t autoStartDate = 0;
+uint32_t autoStopDate = 0;
+
+// Scratch buffers filled by parseScheduleDocument() and committed only after
+// the document has been validated and written to flash.
+ScheduleEntry parsedEntries[MAX_ENTRIES];
+size_t parsedEntryCount = 0;
+ScheduleGroup parsedGroups[MAX_GROUPS];
+size_t parsedGroupCount = 0;
+DateException parsedExceptions[MAX_EXCEPTIONS];
+size_t parsedExceptionCount = 0;
+uint32_t parsedAutoStart = 0;
+uint32_t parsedAutoStop = 0;
 
 DateTime cachedNow(2000, 1, 1, 0, 0, 0);
 bool cachedNowValid = false;
@@ -206,6 +248,44 @@ bool parseTimeOfDay(const String &s, uint16_t &minuteOfDay) {
   return true;
 }
 
+bool validDateParts(int year, int month, int day) {
+  if (year < 2024 || year > 2099 || month < 1 || month > 12 || day < 1) {
+    return false;
+  }
+  static const uint8_t DAYS_IN_MONTH[12] = {31, 28, 31, 30, 31, 30,
+                                            31, 31, 30, 31, 30, 31};
+  uint8_t maxDay = DAYS_IN_MONTH[month - 1];
+  bool leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+  if (month == 2 && leap) maxDay = 29;
+  return day <= maxDay;
+}
+
+// Parses "YYYY-MM-DD" into a comparable YYYYMMDD key.
+bool parseDateKey(const String &s, uint32_t &key) {
+  if (s.length() != 10 || s[4] != '-' || s[7] != '-') return false;
+  int year = 0, month = 0, day = 0;
+  for (size_t i = 0; i < 4; ++i) {
+    char c = s[i];
+    if (c < '0' || c > '9') return false;
+    year = year * 10 + (c - '0');
+  }
+  if (!parseTwoDigits(s, 5, month) || !parseTwoDigits(s, 8, day)) return false;
+  if (!validDateParts(year, month, day)) return false;
+  key = static_cast<uint32_t>(year) * 10000UL + month * 100UL + day;
+  return true;
+}
+
+String formatDateKey(uint32_t key) {
+  char buf[12];
+  snprintf(buf, sizeof(buf), "%04u-%02u-%02u", (unsigned)(key / 10000UL),
+           (unsigned)((key / 100UL) % 100UL), (unsigned)(key % 100UL));
+  return String(buf);
+}
+
+uint32_t dateKeyOf(const DateTime &dt) {
+  return static_cast<uint32_t>(dt.year()) * 10000UL + dt.month() * 100UL + dt.day();
+}
+
 // Truncates a UTF-8 string to at most maxBytes bytes without splitting a
 // multi-byte code point.
 String truncateUtf8(const String &input, size_t maxBytes) {
@@ -288,92 +368,255 @@ void loadSettingsFromFlash() {
   currentMode = sanitizeMode(String(m));
 }
 
-bool entryLess(const ScheduleEntry &a, const ScheduleEntry &b) {
-  if (a.minuteOfDay != b.minuteOfDay) return a.minuteOfDay < b.minuteOfDay;
-  return a.label.compareTo(b.label) < 0;
-}
+// --------------------------- Schedule document ----------------------------
+//
+// Canonical document:
+// {
+//   "version": 2,
+//   "auto": {"start": "YYYY-MM-DD", "stop": "YYYY-MM-DD"},
+//   "groups": [
+//     {"id": 1, "name": "Будни", "days": [1,2,3,4,5],
+//      "entries": [{"time": "08:00", "days": [...], "duration": 5, "label": "..."}]}
+//   ],
+//   "exceptions": [{"date": "YYYY-MM-DD", "mute": true},
+//                  {"date": "YYYY-MM-DD", "group_id": 2}]
+// }
+// A legacy document with only a flat "entries" array is still accepted.
 
-// Insertion sort is used instead of qsort because ScheduleEntry owns a String.
-void sortEntries(ScheduleEntry *list, size_t count) {
-  for (size_t i = 1; i < count; ++i) {
-    ScheduleEntry value = list[i];
-    size_t j = i;
-    while (j > 0 && entryLess(value, list[j - 1])) {
-      list[j] = list[j - 1];
-      --j;
-    }
-    list[j] = value;
+bool parseDaysMask(JsonVariant value, uint8_t &mask) {
+  if (value.isNull()) {
+    mask = ALL_DAYS_MASK;
+    return true;
   }
+  if (!value.is<JsonArray>()) return false;
+  JsonArray days = value.as<JsonArray>();
+  if (days.size() == 0) return false;
+  uint8_t parsed = 0;
+  for (JsonVariant dayValue : days) {
+    if (!dayValue.is<int>()) return false;
+    int day = dayValue.as<int>();
+    if (day < 1 || day > 7) return false;
+    parsed = static_cast<uint8_t>(parsed | (1U << (day - 1)));
+  }
+  mask = parsed;
+  return true;
 }
 
-// Validates the document in place, fills "out" and "count".
+bool parseScheduleEntry(JsonObject obj, uint8_t groupId, ScheduleEntry &out) {
+  JsonVariant timeValue = obj["time"];
+  if (!timeValue.is<const char *>()) return false;
+  uint16_t minuteOfDay = 0;
+  if (!parseTimeOfDay(String(timeValue.as<const char *>()), minuteOfDay)) {
+    return false;
+  }
+
+  uint8_t daysMask = ALL_DAYS_MASK;
+  if (!parseDaysMask(obj["days"], daysMask)) return false;
+
+  uint8_t duration = ringDefault;
+  JsonVariant durationValue = obj["duration"];
+  if (!durationValue.isNull()) {
+    if (!durationValue.is<int>()) return false;
+    int d = durationValue.as<int>();
+    if (d < MIN_RING_SEC || d > MAX_RING_SEC) return false;
+    duration = static_cast<uint8_t>(d);
+  }
+
+  String label;
+  JsonVariant labelValue = obj["label"];
+  if (!labelValue.isNull()) {
+    if (!labelValue.is<const char *>()) return false;
+    label = truncateUtf8(String(labelValue.as<const char *>()), MAX_LABEL_BYTES);
+  }
+
+  out.minuteOfDay = minuteOfDay;
+  out.daysMask = daysMask;
+  out.duration = duration;
+  out.groupId = groupId;
+  out.label = label;
+  return true;
+}
+
+bool parsedGroupExists(uint8_t id) {
+  for (size_t i = 0; i < parsedGroupCount; ++i) {
+    if (parsedGroups[i].id == id) return true;
+  }
+  return false;
+}
+
+// Parses a schedule document into the scratch buffers.
 // Returns nullptr on success, otherwise a stable error code string.
-const char *validateScheduleDocument(JsonDocument &doc, ScheduleEntry *out,
-                                     size_t &count) {
-  count = 0;
-  JsonVariant root = doc["entries"];
-  if (root.isNull() || !root.is<JsonArray>()) return "invalid_schedule";
-  JsonArray arr = root.as<JsonArray>();
-  if (arr.size() > MAX_ENTRIES) return "too_many_entries";
+const char *parseScheduleDocument(JsonDocument &doc) {
+  parsedEntryCount = 0;
+  parsedGroupCount = 0;
+  parsedExceptionCount = 0;
+  parsedAutoStart = 0;
+  parsedAutoStop = 0;
 
-  for (JsonVariant item : arr) {
-    if (!item.is<JsonObject>()) return "invalid_schedule";
-    JsonObject obj = item.as<JsonObject>();
+  JsonVariant groupsValue = doc["groups"];
+  if (!groupsValue.isNull()) {
+    if (!groupsValue.is<JsonArray>()) return "invalid_schedule";
+    JsonArray groupsArray = groupsValue.as<JsonArray>();
+    if (groupsArray.size() > MAX_GROUPS) return "too_many_groups";
 
-    JsonVariant timeValue = obj["time"];
-    if (!timeValue.is<const char *>()) return "invalid_schedule";
-    uint16_t minuteOfDay = 0;
-    if (!parseTimeOfDay(String(timeValue.as<const char *>()), minuteOfDay)) {
+    for (JsonVariant groupValue : groupsArray) {
+      if (!groupValue.is<JsonObject>()) return "invalid_schedule";
+      JsonObject groupObj = groupValue.as<JsonObject>();
+
+      uint8_t groupId = static_cast<uint8_t>(parsedGroupCount + 1);
+      JsonVariant idValue = groupObj["id"];
+      if (!idValue.isNull()) {
+        if (!idValue.is<int>()) return "invalid_schedule";
+        int id = idValue.as<int>();
+        if (id < 1 || id > 255) return "invalid_schedule";
+        if (parsedGroupExists(static_cast<uint8_t>(id))) return "invalid_schedule";
+        groupId = static_cast<uint8_t>(id);
+      }
+
+      uint8_t groupDays = ALL_DAYS_MASK;
+      if (!parseDaysMask(groupObj["days"], groupDays)) return "invalid_schedule";
+      if (groupDays == 0) return "invalid_schedule";
+
+      String name;
+      JsonVariant nameValue = groupObj["name"];
+      if (!nameValue.isNull()) {
+        if (!nameValue.is<const char *>()) return "invalid_schedule";
+        name = truncateUtf8(String(nameValue.as<const char *>()), MAX_GROUP_NAME_BYTES);
+      }
+
+      JsonVariant entriesValue = groupObj["entries"];
+      if (entriesValue.isNull() || !entriesValue.is<JsonArray>()) {
+        return "invalid_schedule";
+      }
+      for (JsonVariant item : entriesValue.as<JsonArray>()) {
+        if (!item.is<JsonObject>()) return "invalid_schedule";
+        if (parsedEntryCount >= MAX_ENTRIES) return "too_many_entries";
+        if (!parseScheduleEntry(item.as<JsonObject>(), groupId,
+                                parsedEntries[parsedEntryCount])) {
+          return "invalid_schedule";
+        }
+        ++parsedEntryCount;
+      }
+
+      parsedGroups[parsedGroupCount].id = groupId;
+      parsedGroups[parsedGroupCount].daysMask = groupDays;
+      parsedGroups[parsedGroupCount].name = name;
+      ++parsedGroupCount;
+    }
+  } else {
+    // Legacy document: a flat list. It becomes one group that is active every
+    // day; the per-entry weekday masks still apply.
+    JsonVariant entriesValue = doc["entries"];
+    if (entriesValue.isNull() || !entriesValue.is<JsonArray>()) {
       return "invalid_schedule";
     }
+    JsonArray entriesArray = entriesValue.as<JsonArray>();
+    if (entriesArray.size() > MAX_ENTRIES) return "too_many_entries";
 
-    uint8_t daysMask = 0;
-    JsonVariant daysValue = obj["days"];
-    if (daysValue.isNull()) {
-      daysMask = 0x7F;  // default: all days
-    } else {
-      if (!daysValue.is<JsonArray>()) return "invalid_schedule";
-      JsonArray days = daysValue.as<JsonArray>();
-      if (days.size() == 0) return "invalid_schedule";
-      for (JsonVariant dayValue : days) {
-        if (!dayValue.is<int>()) return "invalid_schedule";
-        int day = dayValue.as<int>();
-        if (day < 1 || day > 7) return "invalid_schedule";
-        daysMask = static_cast<uint8_t>(daysMask | (1U << (day - 1)));
+    parsedGroups[0].id = 1;
+    parsedGroups[0].daysMask = ALL_DAYS_MASK;
+    parsedGroups[0].name = String("Расписание");
+    parsedGroupCount = 1;
+
+    for (JsonVariant item : entriesArray) {
+      if (!item.is<JsonObject>()) return "invalid_schedule";
+      if (!parseScheduleEntry(item.as<JsonObject>(), 1, parsedEntries[parsedEntryCount])) {
+        return "invalid_schedule";
+      }
+      ++parsedEntryCount;
+    }
+  }
+
+  JsonVariant exceptionsValue = doc["exceptions"];
+  if (!exceptionsValue.isNull()) {
+    if (!exceptionsValue.is<JsonArray>()) return "invalid_schedule";
+    JsonArray exceptionsArray = exceptionsValue.as<JsonArray>();
+    if (exceptionsArray.size() > MAX_EXCEPTIONS) return "too_many_exceptions";
+
+    for (JsonVariant item : exceptionsArray) {
+      if (!item.is<JsonObject>()) return "invalid_schedule";
+      JsonObject obj = item.as<JsonObject>();
+
+      JsonVariant dateValue = obj["date"];
+      if (!dateValue.is<const char *>()) return "invalid_schedule";
+      uint32_t dateKey = 0;
+      if (!parseDateKey(String(dateValue.as<const char *>()), dateKey)) {
+        return "invalid_schedule";
+      }
+      for (size_t i = 0; i < parsedExceptionCount; ++i) {
+        if (parsedExceptions[i].dateKey == dateKey) return "invalid_schedule";
+      }
+
+      bool mute = false;
+      JsonVariant muteValue = obj["mute"];
+      if (!muteValue.isNull()) {
+        if (!muteValue.is<bool>()) return "invalid_schedule";
+        mute = muteValue.as<bool>();
+      }
+
+      uint8_t groupId = 0;
+      JsonVariant groupIdValue = obj["group_id"];
+      if (!groupIdValue.isNull()) {
+        if (!groupIdValue.is<int>()) return "invalid_schedule";
+        int id = groupIdValue.as<int>();
+        if (id < 1 || id > 255 || !parsedGroupExists(static_cast<uint8_t>(id))) {
+          return "invalid_schedule";
+        }
+        groupId = static_cast<uint8_t>(id);
+      }
+      if (!mute && groupId == 0) return "invalid_schedule";
+
+      parsedExceptions[parsedExceptionCount].dateKey = dateKey;
+      parsedExceptions[parsedExceptionCount].mute = mute;
+      parsedExceptions[parsedExceptionCount].groupId = groupId;
+      ++parsedExceptionCount;
+    }
+  }
+
+  JsonVariant autoValue = doc["auto"];
+  if (!autoValue.isNull()) {
+    if (!autoValue.is<JsonObject>()) return "invalid_schedule";
+    JsonObject autoObj = autoValue.as<JsonObject>();
+    JsonVariant startValue = autoObj["start"];
+    if (!startValue.isNull()) {
+      if (!startValue.is<const char *>()) return "invalid_schedule";
+      if (!parseDateKey(String(startValue.as<const char *>()), parsedAutoStart)) {
+        return "invalid_schedule";
       }
     }
-
-    uint8_t duration = ringDefault;
-    JsonVariant durationValue = obj["duration"];
-    if (!durationValue.isNull()) {
-      if (!durationValue.is<int>()) return "invalid_schedule";
-      int d = durationValue.as<int>();
-      if (d < MIN_RING_SEC || d > MAX_RING_SEC) return "invalid_schedule";
-      duration = static_cast<uint8_t>(d);
+    JsonVariant stopValue = autoObj["stop"];
+    if (!stopValue.isNull()) {
+      if (!stopValue.is<const char *>()) return "invalid_schedule";
+      if (!parseDateKey(String(stopValue.as<const char *>()), parsedAutoStop)) {
+        return "invalid_schedule";
+      }
     }
-
-    String label;
-    JsonVariant labelValue = obj["label"];
-    if (!labelValue.isNull()) {
-      if (!labelValue.is<const char *>()) return "invalid_schedule";
-      label = truncateUtf8(String(labelValue.as<const char *>()), MAX_LABEL_BYTES);
+    if (parsedAutoStart != 0 && parsedAutoStop != 0 &&
+        parsedAutoStop < parsedAutoStart) {
+      return "invalid_schedule";
     }
-
-    out[count].minuteOfDay = minuteOfDay;
-    out[count].daysMask = daysMask;
-    out[count].duration = duration;
-    out[count].label = label;
-    ++count;
   }
 
-  if (count > 1) {
-    sortEntries(out, count);
-  }
   return nullptr;
+}
+
+void applyParsedSchedule() {
+  for (size_t i = 0; i < parsedEntryCount; ++i) entries[i] = parsedEntries[i];
+  entryCount = parsedEntryCount;
+  for (size_t i = 0; i < parsedGroupCount; ++i) groups[i] = parsedGroups[i];
+  groupCount = parsedGroupCount;
+  for (size_t i = 0; i < parsedExceptionCount; ++i) exceptions[i] = parsedExceptions[i];
+  exceptionCount = parsedExceptionCount;
+  autoStartDate = parsedAutoStart;
+  autoStopDate = parsedAutoStop;
 }
 
 void loadScheduleFromFlash() {
   entryCount = 0;
+  groupCount = 0;
+  exceptionCount = 0;
+  autoStartDate = 0;
+  autoStopDate = 0;
   if (!storageOk) return;
   File in = LittleFS.open(SCHEDULE_FILE, "r");
   if (!in) return;
@@ -381,29 +624,66 @@ void loadScheduleFromFlash() {
   DeserializationError err = deserializeJson(doc, in);
   in.close();
   if (err) return;
-
-  ScheduleEntry parsed[MAX_ENTRIES];
-  size_t parsedCount = 0;
-  if (validateScheduleDocument(doc, parsed, parsedCount) != nullptr) return;
-  for (size_t i = 0; i < parsedCount; ++i) {
-    entries[i] = parsed[i];
-  }
-  entryCount = parsedCount;
+  if (parseScheduleDocument(doc) != nullptr) return;
+  applyParsedSchedule();
 }
 
-bool saveScheduleToFlash(const ScheduleEntry *list, size_t count) {
-  JsonDocument doc;
-  JsonArray arr = doc["entries"].to<JsonArray>();
-  for (size_t i = 0; i < count; ++i) {
-    JsonObject obj = arr.add<JsonObject>();
-    obj["time"] = formatTimeOfDay(list[i].minuteOfDay);
-    JsonArray days = obj["days"].to<JsonArray>();
-    for (uint8_t bit = 0; bit < 7; ++bit) {
-      if (list[i].daysMask & (1U << bit)) days.add(bit + 1);
-    }
-    obj["duration"] = list[i].duration;
-    obj["label"] = list[i].label;
+void writeDays(JsonObject &obj, uint8_t mask) {
+  JsonArray days = obj["days"].to<JsonArray>();
+  for (uint8_t bit = 0; bit < 7; ++bit) {
+    if (mask & (1U << bit)) days.add(bit + 1);
   }
+}
+
+void appendEntry(JsonArray &arr, const ScheduleEntry &entry) {
+  JsonObject obj = arr.add<JsonObject>();
+  obj["time"] = formatTimeOfDay(entry.minuteOfDay);
+  writeDays(obj, entry.daysMask);
+  obj["duration"] = entry.duration;
+  obj["label"] = entry.label;
+}
+
+void buildScheduleDocument(JsonDocument &doc, bool includeLimits) {
+  doc["version"] = 2;
+  if (includeLimits) {
+    doc["max_entries"] = static_cast<unsigned>(MAX_ENTRIES);
+    doc["max_groups"] = static_cast<unsigned>(MAX_GROUPS);
+    doc["max_exceptions"] = static_cast<unsigned>(MAX_EXCEPTIONS);
+  }
+  if (autoStartDate != 0 || autoStopDate != 0) {
+    JsonObject autoObj = doc["auto"].to<JsonObject>();
+    if (autoStartDate != 0) autoObj["start"] = formatDateKey(autoStartDate);
+    if (autoStopDate != 0) autoObj["stop"] = formatDateKey(autoStopDate);
+  }
+
+  JsonArray groupsArray = doc["groups"].to<JsonArray>();
+  for (size_t g = 0; g < groupCount; ++g) {
+    JsonObject groupObj = groupsArray.add<JsonObject>();
+    groupObj["id"] = groups[g].id;
+    groupObj["name"] = groups[g].name;
+    writeDays(groupObj, groups[g].daysMask);
+    JsonArray entriesArray = groupObj["entries"].to<JsonArray>();
+    for (size_t i = 0; i < entryCount; ++i) {
+      if (entries[i].groupId == groups[g].id) appendEntry(entriesArray, entries[i]);
+    }
+  }
+
+  JsonArray exceptionsArray = doc["exceptions"].to<JsonArray>();
+  for (size_t i = 0; i < exceptionCount; ++i) {
+    JsonObject obj = exceptionsArray.add<JsonObject>();
+    obj["date"] = formatDateKey(exceptions[i].dateKey);
+    if (exceptions[i].mute) obj["mute"] = true;
+    if (exceptions[i].groupId != 0) obj["group_id"] = exceptions[i].groupId;
+  }
+
+  // Legacy flat view so older clients can still read the schedule.
+  JsonArray flat = doc["entries"].to<JsonArray>();
+  for (size_t i = 0; i < entryCount; ++i) appendEntry(flat, entries[i]);
+}
+
+bool saveScheduleToFlash() {
+  JsonDocument doc;
+  buildScheduleDocument(doc, false);
   String payload;
   serializeJson(doc, payload);
   bool ok = storageOk && writeFileAtomic(SCHEDULE_FILE, payload);
@@ -543,15 +823,49 @@ void checkSchedule() {
   lastScheduleMinute = key;
   if (suppressMinuteSet && key == suppressMinuteKey) return;
 
+  // Auto mode is limited to the configured date range (if any).
+  uint32_t today = dateKeyOf(cachedNow);
+  if (autoStartDate != 0 && today < autoStartDate) return;
+  if (autoStopDate != 0 && today > autoStopDate) return;
+
   uint16_t minuteOfDay =
       static_cast<uint16_t>(cachedNow.hour() * 60 + cachedNow.minute());
-  uint8_t mask = static_cast<uint8_t>(1U << (isoWeekday(cachedNow) - 1));
+  uint8_t todayMask = static_cast<uint8_t>(1U << (isoWeekday(cachedNow) - 1));
   uint8_t bestDuration = 0;
-  for (size_t i = 0; i < entryCount; ++i) {
-    if (entries[i].minuteOfDay == minuteOfDay && (entries[i].daysMask & mask)) {
-      if (entries[i].duration > bestDuration) bestDuration = entries[i].duration;
+
+  const DateException *exception = nullptr;
+  for (size_t i = 0; i < exceptionCount; ++i) {
+    if (exceptions[i].dateKey == today) {
+      exception = &exceptions[i];
+      break;
     }
   }
+
+  if (exception != nullptr) {
+    if (exception->mute) return;
+    // An explicit group for this date ignores the group weekday mask.
+    for (size_t i = 0; i < entryCount; ++i) {
+      if (entries[i].groupId == exception->groupId &&
+          entries[i].minuteOfDay == minuteOfDay &&
+          entries[i].duration > bestDuration) {
+        bestDuration = entries[i].duration;
+      }
+    }
+  } else {
+    // First group whose weekday mask matches today is used.
+    for (size_t g = 0; g < groupCount; ++g) {
+      uint8_t activeMask = static_cast<uint8_t>(groups[g].daysMask & todayMask);
+      if (activeMask == 0) continue;
+      for (size_t i = 0; i < entryCount; ++i) {
+        if (entries[i].groupId != groups[g].id) continue;
+        if (entries[i].minuteOfDay != minuteOfDay) continue;
+        if ((entries[i].daysMask & activeMask) == 0) continue;
+        if (entries[i].duration > bestDuration) bestDuration = entries[i].duration;
+      }
+      break;
+    }
+  }
+
   if (bestDuration > 0) startRing(bestDuration);
 }
 
@@ -692,6 +1006,13 @@ void sendStatus() {
   doc["ring_left"] = ringing ? ringLeftSec : 0;
   doc["ring_default"] = ringDefault;
   doc["entries"] = static_cast<unsigned>(entryCount);
+  doc["groups"] = static_cast<unsigned>(groupCount);
+  doc["exceptions"] = static_cast<unsigned>(exceptionCount);
+  if (autoStartDate != 0 || autoStopDate != 0) {
+    JsonObject autoObj = doc["auto"].to<JsonObject>();
+    if (autoStartDate != 0) autoObj["start"] = formatDateKey(autoStartDate);
+    if (autoStopDate != 0) autoObj["stop"] = formatDateKey(autoStopDate);
+  }
   JsonArray errors = doc["errors"].to<JsonArray>();
   if (!rtcOk) errors.add("rtc_not_found");
   if (rtcOk && !timeIsValid()) errors.add("time_not_set");
@@ -868,17 +1189,7 @@ void handlePostTime() {
 void handleGetSchedule() {
   if (!requireToken()) return;
   JsonDocument doc;
-  JsonArray arr = doc["entries"].to<JsonArray>();
-  for (size_t i = 0; i < entryCount; ++i) {
-    JsonObject obj = arr.add<JsonObject>();
-    obj["time"] = formatTimeOfDay(entries[i].minuteOfDay);
-    JsonArray days = obj["days"].to<JsonArray>();
-    for (uint8_t bit = 0; bit < 7; ++bit) {
-      if (entries[i].daysMask & (1U << bit)) days.add(bit + 1);
-    }
-    obj["duration"] = entries[i].duration;
-    obj["label"] = entries[i].label;
-  }
+  buildScheduleDocument(doc, true);
   String payload;
   serializeJson(doc, payload);
   sendJson(200, payload);
@@ -894,27 +1205,24 @@ void handlePostSchedule() {
     return;
   }
 
-  ScheduleEntry parsed[MAX_ENTRIES];
-  size_t parsedCount = 0;
-  const char *validationError = validateScheduleDocument(doc, parsed, parsedCount);
+  const char *validationError = parseScheduleDocument(doc);
   if (validationError != nullptr) {
     sendError(400, validationError);
     return;
   }
 
-  if (!saveScheduleToFlash(parsed, parsedCount)) {
+  if (!saveScheduleToFlash()) {
     sendError(500, "storage_error");
     return;
   }
 
-  for (size_t i = 0; i < parsedCount; ++i) {
-    entries[i] = parsed[i];
-  }
-  entryCount = parsedCount;
+  applyParsedSchedule();
 
   JsonDocument out;
   out["ok"] = true;
   out["entries"] = static_cast<unsigned>(entryCount);
+  out["groups"] = static_cast<unsigned>(groupCount);
+  out["exceptions"] = static_cast<unsigned>(exceptionCount);
   String payload;
   serializeJson(out, payload);
   sendJson(200, payload);

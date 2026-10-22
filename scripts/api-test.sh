@@ -121,7 +121,7 @@ code="$(request GET /status "" "${WORK_DIR}/status.json")"
 expect_code 200 "${code}" "GET /status" "${WORK_DIR}/status.json"
 expect_contains "${WORK_DIR}/status.json" '"rtc_ok"' "status contains rtc_ok"
 expect_contains "${WORK_DIR}/status.json" '"errors"' "status contains errors"
-expect_contains "${WORK_DIR}/status.json" '"fw":"1.0.0"' "status contains firmware version"
+expect_contains "${WORK_DIR}/status.json" '"fw":"1.1.0"' "status contains firmware version"
 
 code="$(request GET /mode "" "${WORK_DIR}/original_mode.json")"
 expect_code 200 "${code}" "GET /mode" "${WORK_DIR}/original_mode.json"
@@ -232,6 +232,30 @@ expect_code 200 "${code}" "GET /schedule default days" \
 expect_contains "${WORK_DIR}/schedule_default_days_get.json" '"days":[1,2,3,4,5,6,7]' \
     "omitted days default to Monday-Sunday"
 
+GROUP_SCHEDULE='{"version":2,"auto":{"start":"2026-01-10","stop":"2026-06-30"},"groups":[{"id":1,"name":"Будни","days":[1,2,3,4,5],"entries":[{"time":"08:00","duration":4,"label":"1 урок"}]},{"id":2,"name":"Суббота","days":[6],"entries":[]}],"exceptions":[{"date":"2026-03-08","mute":true},{"date":"2026-03-09","group_id":2}]}'
+code="$(request POST /schedule "${GROUP_SCHEDULE}" "${WORK_DIR}/schedule_groups_post.json")"
+expect_code 200 "${code}" "POST /schedule with groups" \
+    "${WORK_DIR}/schedule_groups_post.json"
+expect_contains "${WORK_DIR}/schedule_groups_post.json" '"groups":2' \
+    "group count is reported"
+
+code="$(request GET /schedule "" "${WORK_DIR}/schedule_groups_get.json")"
+expect_code 200 "${code}" "GET /schedule with groups" \
+    "${WORK_DIR}/schedule_groups_get.json"
+expect_contains "${WORK_DIR}/schedule_groups_get.json" '"name":"Будни"' \
+    "group name is returned"
+expect_contains "${WORK_DIR}/schedule_groups_get.json" '"mute":true' \
+    "date exception is returned"
+expect_contains "${WORK_DIR}/schedule_groups_get.json" '"start":"2026-01-10"' \
+    "auto start date is returned"
+
+BAD_GROUP_SCHEDULE='{"groups":[{"id":1,"name":"A","days":[1],"entries":[]}],"exceptions":[{"date":"2026-03-09","group_id":9}]}'
+code="$(request POST /schedule "${BAD_GROUP_SCHEDULE}" "${WORK_DIR}/schedule_bad_group.json")"
+expect_code 400 "${code}" "POST /schedule rejects unknown exception group" \
+    "${WORK_DIR}/schedule_bad_group.json"
+expect_contains "${WORK_DIR}/schedule_bad_group.json" '"error":"invalid_schedule"' \
+    "invalid exception group error code"
+
 INVALID_SCHEDULE='{"entries":[{"time":"25:99","days":[1],"duration":5,"label":"bad"}]}'
 code="$(request POST /schedule "${INVALID_SCHEDULE}" "${WORK_DIR}/schedule_invalid.json")"
 expect_code 400 "${code}" "POST /schedule rejects invalid time" \
@@ -240,7 +264,7 @@ expect_contains "${WORK_DIR}/schedule_invalid.json" '"error":"invalid_schedule"'
     "invalid schedule error code"
 
 MANY_ENTRIES='{"entries":['
-for i in $(seq 1 65); do
+for i in $(seq 1 257); do
     if [[ "${i}" -gt 1 ]]; then
         MANY_ENTRIES+=','
     fi
@@ -248,7 +272,7 @@ for i in $(seq 1 65); do
 done
 MANY_ENTRIES+=']}'
 code="$(request POST /schedule "${MANY_ENTRIES}" "${WORK_DIR}/schedule_too_many.json")"
-expect_code 400 "${code}" "POST /schedule rejects more than 64 entries" \
+expect_code 400 "${code}" "POST /schedule rejects more than 256 entries" \
     "${WORK_DIR}/schedule_too_many.json"
 expect_contains "${WORK_DIR}/schedule_too_many.json" '"error":"too_many_entries"' \
     "too many entries error code"
