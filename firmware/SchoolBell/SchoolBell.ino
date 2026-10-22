@@ -214,16 +214,16 @@ String truncateUtf8(const String &input, size_t maxBytes) {
   return input.substring(0, cut);
 }
 
-void clearOscillatorStopFlag() {
+bool clearOscillatorStopFlag() {
   Wire.beginTransmission(0x68);
   Wire.write(0x0F);  // DS3231 status register
-  Wire.endTransmission(false);
-  if (Wire.requestFrom(0x68, 1) != 1) return;
+  if (Wire.endTransmission(false) != 0) return false;
+  if (Wire.requestFrom(0x68, 1) != 1) return false;
   uint8_t status = Wire.read();
   Wire.beginTransmission(0x68);
   Wire.write(0x0F);
   Wire.write(static_cast<uint8_t>(status & 0x7F));  // clear OSF
-  Wire.endTransmission();
+  return Wire.endTransmission() == 0;
 }
 
 // --------------------------- Storage layer --------------------------------
@@ -496,9 +496,14 @@ bool readOscillatorStopFlag(bool &flag) {
 void refreshRtcStatus() {
   if (!rtcOk) return;
   bool flag = false;
-  if (readOscillatorStopFlag(flag)) {
-    rtcLostPower = flag;
+  if (!readOscillatorStopFlag(flag)) {
+    // The DS3231 stopped acknowledging I2C. Report rtc_not_found and let the
+    // periodic re-detection bring it back when the connection is restored.
+    rtcOk = false;
+    cachedNowValid = false;
+    return;
   }
+  rtcLostPower = flag;
 }
 
 void handleRtcTimers() {
@@ -832,8 +837,7 @@ void handlePostTime() {
   }
 
   rtc.adjust(requested);
-  clearOscillatorStopFlag();
-  rtcLostPower = false;
+  rtcLostPower = !clearOscillatorStopFlag();
   cachedNow = requested;
   cachedNowValid = true;
   suppressMinuteKey = minuteKey(requested);
