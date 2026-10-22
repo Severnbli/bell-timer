@@ -3,7 +3,9 @@
 // Hardware:
 //   GPIO21/22 - DS3231 RTC (I2C, address 0x68, stores LOCAL time)
 //   GPIO26    - relay input, ACTIVE LOW (LOW = relay on)
-//   GPIO27    - status LED, active HIGH
+//   GPIO27    - KY-029 "G" pin (green die)
+//   GPIO25    - KY-029 "R" pin (red die)
+//   KY-029 common pin - GND (common cathode) or 3V3 (common anode)
 //
 // The device creates its own Wi-Fi access point and serves a small JSON API.
 
@@ -28,7 +30,12 @@ const uint8_t AP_CHANNEL = 6;
 const uint8_t AP_MAX_CLIENTS = 4;
 
 const uint8_t PIN_RELAY = 26;
-const uint8_t PIN_LED = 27;
+const uint8_t PIN_LED_GREEN = 27;  // KY-029 "G" pin
+const uint8_t PIN_LED_RED = 25;    // KY-029 "R" pin
+// The KY-029 exists in a common-cathode and a common-anode variant. With the
+// common pin tied to GND the dies are lit by a HIGH level (false); with the
+// common pin tied to 3V3 they are lit by a LOW level (true).
+const bool LED_ACTIVE_LOW = false;
 const uint8_t PIN_I2C_SDA = 21;
 const uint8_t PIN_I2C_SCL = 22;
 
@@ -127,6 +134,21 @@ const size_t SOS_PATTERN_LEN = sizeof(SOS_PATTERN) / sizeof(SOS_PATTERN[0]);
 
 void relayOn() { digitalWrite(PIN_RELAY, LOW); }
 void relayOff() { digitalWrite(PIN_RELAY, HIGH); }
+
+// Single point that translates a logical LED state into a pin level, so the
+// common-cathode and common-anode KY-029 variants differ only by a constant.
+inline void ledWrite(uint8_t pin, bool on) {
+  digitalWrite(pin, on == LED_ACTIVE_LOW ? LOW : HIGH);
+}
+
+// Pin level that keeps a die dark, used before pinMode() so the LED never
+// flashes during boot.
+inline uint8_t ledOffLevel() { return LED_ACTIVE_LOW ? HIGH : LOW; }
+
+void setLed(bool green, bool red) {
+  ledWrite(PIN_LED_GREEN, green);
+  ledWrite(PIN_LED_RED, red);
+}
 
 String formatDateTime(const DateTime &dt) {
   char buf[20];
@@ -562,33 +584,40 @@ void resetSos() {
   ledLastChangeMs = millis();
 }
 
+// Colour mapping on the KY-029 dual-colour module:
+//   amber (green + red) - the bell is ringing
+//   red SOS             - an error is active (RTC, time, storage or AP)
+//   green 1 Hz blink    - idle and healthy
 void updateLed() {
   if (ringing) {
-    digitalWrite(PIN_LED, HIGH);
+    setLed(true, true);
     resetSos();
     return;
   }
 
   if (hasActiveErrors()) {
     uint32_t nowMs = millis();
+    bool dieOn = false;
     if (!ledSosActive) {
       ledSosActive = true;
       ledStepIndex = 0;
       ledLastChangeMs = nowMs;
-      digitalWrite(PIN_LED, SOS_PATTERN[0].on ? HIGH : LOW);
-      return;
+      dieOn = SOS_PATTERN[0].on;
+    } else {
+      if (nowMs - ledLastChangeMs >= SOS_PATTERN[ledStepIndex].durationMs) {
+        ledLastChangeMs = nowMs;
+        ledStepIndex = (ledStepIndex + 1) % SOS_PATTERN_LEN;
+      }
+      dieOn = SOS_PATTERN[ledStepIndex].on;
     }
-    if (nowMs - ledLastChangeMs >= SOS_PATTERN[ledStepIndex].durationMs) {
-      ledLastChangeMs = nowMs;
-      ledStepIndex = (ledStepIndex + 1) % SOS_PATTERN_LEN;
-      digitalWrite(PIN_LED, SOS_PATTERN[ledStepIndex].on ? HIGH : LOW);
-    }
+    // The green die stays dark so the red SOS is unambiguous.
+    setLed(false, dieOn);
     return;
   }
 
   if (ledSosActive) resetSos();
   bool on = (millis() / 500UL) % 2UL == 0UL;
-  digitalWrite(PIN_LED, on ? HIGH : LOW);
+  setLed(on, false);
 }
 
 // ------------------------------ Wi-Fi / AP --------------------------------
@@ -1020,8 +1049,12 @@ void setup() {
   pinMode(PIN_RELAY, OUTPUT);
   relayOff();
 
-  pinMode(PIN_LED, OUTPUT);
-  digitalWrite(PIN_LED, LOW);
+  // KY-029: drive the dark level before the pins become outputs.
+  digitalWrite(PIN_LED_GREEN, ledOffLevel());
+  digitalWrite(PIN_LED_RED, ledOffLevel());
+  pinMode(PIN_LED_GREEN, OUTPUT);
+  pinMode(PIN_LED_RED, OUTPUT);
+  setLed(false, false);
 
   Serial.begin(115200);
 

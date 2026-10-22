@@ -22,7 +22,9 @@ README.md
 | DS3231 SDA | GPIO21 | I2C, address `0x68`, RTC stores **local** time |
 | DS3231 SCL | GPIO22 | I2C |
 | Relay IN | GPIO26 | 5 V relay module with optocoupler, **active LOW** |
-| Status LED | GPIO27 | KY-029 signal pin, active HIGH |
+| Status LED green | GPIO27 | KY-029 `G` pin, active HIGH |
+| Status LED red | GPIO25 | KY-029 `R` pin, active HIGH |
+| KY-029 common | GND | Tied to GND = common cathode (`LED_ACTIVE_LOW = false`) |
 
 The relay is forced OFF at boot: GPIO26 is driven HIGH before it becomes an
 output. There are no buttons or switches. Power the board from USB 5 V.
@@ -299,12 +301,22 @@ goes away.
 
 ## Status LED
 
-Priority from highest to lowest:
+The KY-029 is a dual-colour module: two dies (green and red) sharing one common
+pin. It is wired to two GPIOs, so the colours below are produced natively.
 
-1. Ringing — LED solid ON.
-2. Any active error — Morse SOS (`... --- ...`): dot 150 ms, dash 450 ms,
-   150 ms between signals, 450 ms between letters, 1.5 s pause.
-3. Normal — 1 Hz slow blink (500 ms on, 500 ms off).
+| Colour | Meaning |
+| --- | --- |
+| Green, 1 Hz blink (500 ms on/off) | Normal, no errors |
+| Red, Morse SOS (`... --- ...`) | An error is active: `rtc_not_found`, `time_not_set`, `storage_error`, `wifi_ap_error` |
+| Amber (green + red together) | The bell is ringing |
+
+Priority from highest to lowest: ringing, error, normal. The SOS timing is a
+150 ms dot, 450 ms dash, 150 ms between signals, 450 ms between letters and a
+1.5 s pause before repeating.
+
+If your KY-029 is the **common-anode** variant (common pin to 3V3 instead of
+GND), set `LED_ACTIVE_LOW = true` in `firmware/SchoolBell/SchoolBell.ino` and
+reflash; nothing else changes.
 
 ## Automated API test
 
@@ -326,10 +338,11 @@ schedule, mode and `ring_default` and restores them on exit.
 2. The serial monitor prints no crash/reboot loop after power-up.
 3. The SchoolBell SSID appears; a phone gets an address in `192.168.4.0/24`.
 4. `curl http://192.168.4.1/status` returns JSON with `"fw":"1.0.0"`.
-5. LED blinks 1 Hz; disconnecting the RTC shows SOS and `rtc_not_found`.
+5. LED blinks green 1 Hz; disconnecting the RTC shows a red SOS and
+   `rtc_not_found`.
 6. Set the time from the app; `rtc_ok` becomes `true`, `time_not_set` clears.
-7. Ring for 3 s and press Stop: relay clicks on/off and the LED is solid while
-   ringing.
+7. Ring for 3 s and press Stop: relay clicks on/off and the LED is amber (green
+   plus red) while ringing.
 8. Save a schedule entry one minute in the future; at second 0 the relay clicks
    once. Check a same-minute pair rings for the longer duration.
 9. Switch to `manual`; the schedule no longer fires, manual ring still works.
