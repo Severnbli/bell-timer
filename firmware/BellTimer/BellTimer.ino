@@ -28,7 +28,10 @@
 
 namespace {
 
-const char *const FW_VERSION = "1.1.0";
+const char *const FW_VERSION = "1.2.0";
+
+// API level reported by GET /status. Level 3 adds per-date overrides.
+const uint8_t API_VERSION = 3;
 
 // ----------------------------- Configuration ------------------------------
 
@@ -49,14 +52,18 @@ const uint8_t PIN_I2C_SDA = BELLTIMER_PIN_I2C_SDA;
 const uint8_t PIN_I2C_SCL = BELLTIMER_PIN_I2C_SCL;
 
 // A schedule is a set of named groups. Every group owns a list of bells and
-// repeats on the weekdays selected for the group. Date exceptions can mute a
-// day or point it at another group. Auto mode can be limited to a date range.
-// The limits below are mirrored by the Android app (data/Models.kt).
-const size_t MAX_ENTRIES = 256;        // bells across all groups
-const size_t MAX_GROUPS = 12;          // named schedule groups
-const size_t MAX_EXCEPTIONS = 64;      // per-date overrides
-const size_t MAX_LABEL_BYTES = 45;     // About 15 Cyrillic characters in UTF-8.
+// repeats on the weekdays selected for the group. A per-date override can mute
+// a day, replace its bells or add extra bells on top. Auto mode can be limited
+// to a date range. The limits below are mirrored by the Android app
+// (data/Models.kt).
+const size_t MAX_ENTRIES = 256;      // bells across all groups and overrides
+const size_t MAX_GROUPS = 12;        // named schedule groups
+const size_t MAX_OVERRIDES = 90;     // per-date overrides
+const size_t MAX_LABEL_BYTES = 32;   // About 10 Cyrillic characters in UTF-8.
 const size_t MAX_GROUP_NAME_BYTES = 32;
+// Bodies larger than this are rejected before parsing, so an oversized
+// document cannot exhaust the heap.
+const size_t MAX_SCHEDULE_BODY_BYTES = 16384;
 const uint8_t MIN_RING_SEC = 1;
 const uint8_t MAX_RING_SEC = 60;
 const uint8_t DEFAULT_RING_SEC = 5;
@@ -77,7 +84,8 @@ struct ScheduleEntry {
   uint16_t minuteOfDay = 0;  // 0..1439
   uint8_t daysMask = ALL_DAYS_MASK;
   uint8_t duration = DEFAULT_RING_SEC;
-  uint8_t groupId = 0;  // id of the owning group
+  uint8_t groupId = 0;       // owning group, 0 for override entries
+  uint8_t overrideSlot = 0;  // 1..MAX_OVERRIDES, 0 for schedule entries
   String label;
 };
 
@@ -87,10 +95,18 @@ struct ScheduleGroup {
   String name;
 };
 
-struct DateException {
-  uint32_t dateKey = 0;  // YYYYMMDD
-  bool mute = false;     // true: no bells on this date
-  uint8_t groupId = 0;   // 0: not overridden
+// How a date override changes the day: ring nothing, use its own bell list or
+// add extra bells on top of the schedule.
+enum OverrideMode : uint8_t {
+  OVERRIDE_MUTE = 0,
+  OVERRIDE_REPLACE = 1,
+  OVERRIDE_ADD = 2,
+};
+
+struct DayOverride {
+  uint32_t dateKey = 0;        // YYYYMMDD
+  uint8_t mode = OVERRIDE_MUTE;
+  uint8_t basedOnGroupId = 0;  // metadata only, never used for evaluation
 };
 
 // ------------------------------- State ------------------------------------
@@ -112,9 +128,8 @@ size_t entryCount = 0;
 ScheduleGroup groups[MAX_GROUPS];
 size_t groupCount = 0;
 
-DateException exceptions[MAX_EXCEPTIONS];
-size_t exceptionCount = 0;
-
+DayOverride overrides[MAX_OVERRIDES];
+size_t overrideCount = 0;
 // Auto mode date range. A zero key means "no limit".
 uint32_t autoStartDate = 0;
 uint32_t autoStopDate = 0;
@@ -125,8 +140,8 @@ ScheduleEntry parsedEntries[MAX_ENTRIES];
 size_t parsedEntryCount = 0;
 ScheduleGroup parsedGroups[MAX_GROUPS];
 size_t parsedGroupCount = 0;
-DateException parsedExceptions[MAX_EXCEPTIONS];
-size_t parsedExceptionCount = 0;
+DayOverride parsedOverrides[MAX_OVERRIDES];
+size_t parsedOverrideCount = 0;
 uint32_t parsedAutoStart = 0;
 uint32_t parsedAutoStop = 0;
 
@@ -286,6 +301,52 @@ uint32_t dateKeyOf(const DateTime &dt) {
   return static_cast<uint32_t>(dt.year()) * 10000UL + dt.month() * 100UL + dt.day();
 }
 
+// ISO weekday (1 = Monday .. 7 = Sunday) of a YYYYMMDD key.
+uint8_t isoWeekdayFromDateKey(uint32_t key) {
+  int y = static_cast<int>(key / 10000UL);
+  int m = static_cast<int>((key / 100UL) % 100UL);
+  int d = static_cast<int>(key % 100UL);
+  static const int OFFSETS[12] = {0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4};
+  if (m < 3) --y;
+  int w = (y + y / 4 - y / 100 + y / 400 + OFFSETS[m - 1] + d) % 7;  // 0 = Sunday
+  return w == 0 ? 7 : static_cast<uint8_t>(w);
+}
+
+// Shifts a YYYYMMDD key by whole days.
+uint32_t addDaysToDateKey(uint32_t key, int days) {
+  DateTime base(static_cast<int>(key / 10000UL),
+                static_cast<int>((key / 100UL) % 100UL),
+                static_cast<int>(key % 100UL), 12, 0, 0);
+  DateTime moved(base.unixtime() + static_cast<int32_t>(days) * 86400L);
+  return dateKeyOf(moved);
+}
+
+const char *overrideModeName(uint8_t mode) {
+  switch (mode) {
+    case OVERRIDE_REPLACE:
+      return "replace";
+    case OVERRIDE_ADD:
+      return "add";
+    default:
+      return "mute";
+  }
+}
+
+bool parseOverrideMode(JsonVariant value, uint8_t &mode) {
+  if (!value.is<const char *>()) return false;
+  String raw = String(value.as<const char *>());
+  if (raw == "mute") {
+    mode = OVERRIDE_MUTE;
+  } else if (raw == "replace") {
+    mode = OVERRIDE_REPLACE;
+  } else if (raw == "add") {
+    mode = OVERRIDE_ADD;
+  } else {
+    return false;
+  }
+  return true;
+}
+
 // Truncates a UTF-8 string to at most maxBytes bytes without splitting a
 // multi-byte code point.
 String truncateUtf8(const String &input, size_t maxBytes) {
@@ -370,18 +431,24 @@ void loadSettingsFromFlash() {
 
 // --------------------------- Schedule document ----------------------------
 //
-// Canonical document:
+// Canonical document (version 3):
 // {
-//   "version": 2,
+//   "version": 3,
 //   "auto": {"start": "YYYY-MM-DD", "stop": "YYYY-MM-DD"},
 //   "groups": [
 //     {"id": 1, "name": "Будни", "days": [1,2,3,4,5],
 //      "entries": [{"time": "08:00", "days": [...], "duration": 5, "label": "..."}]}
 //   ],
-//   "exceptions": [{"date": "YYYY-MM-DD", "mute": true},
-//                  {"date": "YYYY-MM-DD", "group_id": 2}]
+//   "overrides": [
+//     {"date": "YYYY-MM-DD", "mode": "mute"},
+//     {"date": "YYYY-MM-DD", "mode": "replace", "based_on": 1,
+//      "entries": [{"time": "09:00", "duration": 5, "label": "..."}]},
+//     {"date": "YYYY-MM-DD", "mode": "add",
+//      "entries": [{"time": "12:30", "duration": 10, "label": "..."}]}
+//   ]
 // }
-// A legacy document with only a flat "entries" array is still accepted.
+// Version 2 documents ("exceptions" with mute/group_id) and version 1 documents
+// (a flat "entries" array) are still accepted and migrated in memory.
 
 bool parseDaysMask(JsonVariant value, uint8_t &mask) {
   if (value.isNull()) {
@@ -402,7 +469,8 @@ bool parseDaysMask(JsonVariant value, uint8_t &mask) {
   return true;
 }
 
-bool parseScheduleEntry(JsonObject obj, uint8_t groupId, ScheduleEntry &out) {
+bool parseScheduleEntry(JsonObject obj, uint8_t groupId, uint8_t overrideSlot,
+                        ScheduleEntry &out) {
   JsonVariant timeValue = obj["time"];
   if (!timeValue.is<const char *>()) return false;
   uint16_t minuteOfDay = 0;
@@ -410,8 +478,10 @@ bool parseScheduleEntry(JsonObject obj, uint8_t groupId, ScheduleEntry &out) {
     return false;
   }
 
+  // A schedule bell may carry a weekday mask that narrows the group. Inside an
+  // override the date decides, so "days" is ignored there.
   uint8_t daysMask = ALL_DAYS_MASK;
-  if (!parseDaysMask(obj["days"], daysMask)) return false;
+  if (overrideSlot == 0 && !parseDaysMask(obj["days"], daysMask)) return false;
 
   uint8_t duration = ringDefault;
   JsonVariant durationValue = obj["duration"];
@@ -433,6 +503,7 @@ bool parseScheduleEntry(JsonObject obj, uint8_t groupId, ScheduleEntry &out) {
   out.daysMask = daysMask;
   out.duration = duration;
   out.groupId = groupId;
+  out.overrideSlot = overrideSlot;
   out.label = label;
   return true;
 }
@@ -449,7 +520,7 @@ bool parsedGroupExists(uint8_t id) {
 const char *parseScheduleDocument(JsonDocument &doc) {
   parsedEntryCount = 0;
   parsedGroupCount = 0;
-  parsedExceptionCount = 0;
+  parsedOverrideCount = 0;
   parsedAutoStart = 0;
   parsedAutoStop = 0;
 
@@ -491,7 +562,7 @@ const char *parseScheduleDocument(JsonDocument &doc) {
       for (JsonVariant item : entriesValue.as<JsonArray>()) {
         if (!item.is<JsonObject>()) return "invalid_schedule";
         if (parsedEntryCount >= MAX_ENTRIES) return "too_many_entries";
-        if (!parseScheduleEntry(item.as<JsonObject>(), groupId,
+        if (!parseScheduleEntry(item.as<JsonObject>(), groupId, 0,
                                 parsedEntries[parsedEntryCount])) {
           return "invalid_schedule";
         }
@@ -520,18 +591,82 @@ const char *parseScheduleDocument(JsonDocument &doc) {
 
     for (JsonVariant item : entriesArray) {
       if (!item.is<JsonObject>()) return "invalid_schedule";
-      if (!parseScheduleEntry(item.as<JsonObject>(), 1, parsedEntries[parsedEntryCount])) {
+      if (!parseScheduleEntry(item.as<JsonObject>(), 1, 0,
+                              parsedEntries[parsedEntryCount])) {
         return "invalid_schedule";
       }
       ++parsedEntryCount;
     }
   }
 
+  // Version 3 replaces "exceptions" with "overrides".
+  JsonVariant overridesValue = doc["overrides"];
   JsonVariant exceptionsValue = doc["exceptions"];
+  if (!overridesValue.isNull() && !exceptionsValue.isNull()) {
+    return "invalid_schedule";
+  }
+
+  if (!overridesValue.isNull()) {
+    if (!overridesValue.is<JsonArray>()) return "invalid_schedule";
+    JsonArray overridesArray = overridesValue.as<JsonArray>();
+    if (overridesArray.size() > MAX_OVERRIDES) return "too_many_overrides";
+
+    for (JsonVariant item : overridesArray) {
+      if (!item.is<JsonObject>()) return "invalid_schedule";
+      JsonObject obj = item.as<JsonObject>();
+
+      JsonVariant dateValue = obj["date"];
+      if (!dateValue.is<const char *>()) return "invalid_schedule";
+      uint32_t dateKey = 0;
+      if (!parseDateKey(String(dateValue.as<const char *>()), dateKey)) {
+        return "invalid_schedule";
+      }
+      for (size_t i = 0; i < parsedOverrideCount; ++i) {
+        if (parsedOverrides[i].dateKey == dateKey) return "invalid_schedule";
+      }
+
+      uint8_t mode = OVERRIDE_MUTE;
+      if (!parseOverrideMode(obj["mode"], mode)) return "invalid_schedule";
+
+      uint8_t basedOn = 0;
+      JsonVariant basedValue = obj["based_on"];
+      if (!basedValue.isNull()) {
+        if (!basedValue.is<int>()) return "invalid_schedule";
+        int id = basedValue.as<int>();
+        if (id < 0 || id > 255) return "invalid_schedule";
+        basedOn = static_cast<uint8_t>(id);
+      }
+
+      uint8_t slot = static_cast<uint8_t>(parsedOverrideCount + 1);
+      if (mode != OVERRIDE_MUTE) {
+        JsonVariant entriesValue = obj["entries"];
+        if (!entriesValue.isNull()) {
+          if (!entriesValue.is<JsonArray>()) return "invalid_schedule";
+          for (JsonVariant entry : entriesValue.as<JsonArray>()) {
+            if (!entry.is<JsonObject>()) return "invalid_schedule";
+            if (parsedEntryCount >= MAX_ENTRIES) return "too_many_entries";
+            if (!parseScheduleEntry(entry.as<JsonObject>(), 0, slot,
+                                    parsedEntries[parsedEntryCount])) {
+              return "invalid_schedule";
+            }
+            ++parsedEntryCount;
+          }
+        }
+      }
+
+      parsedOverrides[parsedOverrideCount].dateKey = dateKey;
+      parsedOverrides[parsedOverrideCount].mode = mode;
+      parsedOverrides[parsedOverrideCount].basedOnGroupId = basedOn;
+      ++parsedOverrideCount;
+    }
+  }
+
+  // Version 2 migration: "mute" stays mute, "group_id" becomes a copy of that
+  // group's bell list. The next save rewrites storage as version 3.
   if (!exceptionsValue.isNull()) {
     if (!exceptionsValue.is<JsonArray>()) return "invalid_schedule";
     JsonArray exceptionsArray = exceptionsValue.as<JsonArray>();
-    if (exceptionsArray.size() > MAX_EXCEPTIONS) return "too_many_exceptions";
+    if (exceptionsArray.size() > MAX_OVERRIDES) return "too_many_exceptions";
 
     for (JsonVariant item : exceptionsArray) {
       if (!item.is<JsonObject>()) return "invalid_schedule";
@@ -543,8 +678,8 @@ const char *parseScheduleDocument(JsonDocument &doc) {
       if (!parseDateKey(String(dateValue.as<const char *>()), dateKey)) {
         return "invalid_schedule";
       }
-      for (size_t i = 0; i < parsedExceptionCount; ++i) {
-        if (parsedExceptions[i].dateKey == dateKey) return "invalid_schedule";
+      for (size_t i = 0; i < parsedOverrideCount; ++i) {
+        if (parsedOverrides[i].dateKey == dateKey) return "invalid_schedule";
       }
 
       bool mute = false;
@@ -566,10 +701,25 @@ const char *parseScheduleDocument(JsonDocument &doc) {
       }
       if (!mute && groupId == 0) return "invalid_schedule";
 
-      parsedExceptions[parsedExceptionCount].dateKey = dateKey;
-      parsedExceptions[parsedExceptionCount].mute = mute;
-      parsedExceptions[parsedExceptionCount].groupId = groupId;
-      ++parsedExceptionCount;
+      uint8_t mode = mute ? OVERRIDE_MUTE : OVERRIDE_REPLACE;
+      uint8_t slot = static_cast<uint8_t>(parsedOverrideCount + 1);
+      if (mode == OVERRIDE_REPLACE) {
+        size_t groupEntryCount = parsedEntryCount;
+        for (size_t i = 0; i < groupEntryCount; ++i) {
+          if (parsedEntries[i].overrideSlot != 0) continue;
+          if (parsedEntries[i].groupId != groupId) continue;
+          if (parsedEntryCount >= MAX_ENTRIES) return "too_many_entries";
+          parsedEntries[parsedEntryCount] = parsedEntries[i];
+          parsedEntries[parsedEntryCount].groupId = 0;
+          parsedEntries[parsedEntryCount].overrideSlot = slot;
+          ++parsedEntryCount;
+        }
+      }
+
+      parsedOverrides[parsedOverrideCount].dateKey = dateKey;
+      parsedOverrides[parsedOverrideCount].mode = mode;
+      parsedOverrides[parsedOverrideCount].basedOnGroupId = groupId;
+      ++parsedOverrideCount;
     }
   }
 
@@ -605,16 +755,51 @@ void applyParsedSchedule() {
   entryCount = parsedEntryCount;
   for (size_t i = 0; i < parsedGroupCount; ++i) groups[i] = parsedGroups[i];
   groupCount = parsedGroupCount;
-  for (size_t i = 0; i < parsedExceptionCount; ++i) exceptions[i] = parsedExceptions[i];
-  exceptionCount = parsedExceptionCount;
+  for (size_t i = 0; i < parsedOverrideCount; ++i) overrides[i] = parsedOverrides[i];
+  overrideCount = parsedOverrideCount;
   autoStartDate = parsedAutoStart;
   autoStopDate = parsedAutoStop;
+}
+
+// Drops parsed overrides older than 30 days so the flash file does not grow
+// without bound. Entries follow their override slot.
+void pruneParsedOverrides(uint32_t todayKey) {
+  if (!timeIsValid()) return;
+  uint32_t cutoff = addDaysToDateKey(todayKey, -30);
+  uint8_t slotMap[MAX_OVERRIDES + 1];
+  for (size_t i = 0; i <= MAX_OVERRIDES; ++i) slotMap[i] = 0;
+
+  size_t kept = 0;
+  for (size_t i = 0; i < parsedOverrideCount; ++i) {
+    if (parsedOverrides[i].dateKey >= cutoff) {
+      slotMap[i + 1] = static_cast<uint8_t>(kept + 1);
+      if (kept != i) parsedOverrides[kept] = parsedOverrides[i];
+      ++kept;
+    }
+  }
+  parsedOverrideCount = kept;
+
+  size_t written = 0;
+  for (size_t i = 0; i < parsedEntryCount; ++i) {
+    uint8_t slot = parsedEntries[i].overrideSlot;
+    if (slot != 0) {
+      uint8_t mapped = slot <= MAX_OVERRIDES ? slotMap[slot] : 0;
+      if (mapped == 0) continue;
+      parsedEntries[written] = parsedEntries[i];
+      parsedEntries[written].overrideSlot = mapped;
+      ++written;
+    } else {
+      parsedEntries[written] = parsedEntries[i];
+      ++written;
+    }
+  }
+  parsedEntryCount = written;
 }
 
 void loadScheduleFromFlash() {
   entryCount = 0;
   groupCount = 0;
-  exceptionCount = 0;
+  overrideCount = 0;
   autoStartDate = 0;
   autoStopDate = 0;
   if (!storageOk) return;
@@ -635,20 +820,20 @@ void writeDays(JsonObject &obj, uint8_t mask) {
   }
 }
 
-void appendEntry(JsonArray &arr, const ScheduleEntry &entry) {
+void appendEntry(JsonArray &arr, const ScheduleEntry &entry, bool withDays) {
   JsonObject obj = arr.add<JsonObject>();
   obj["time"] = formatTimeOfDay(entry.minuteOfDay);
-  writeDays(obj, entry.daysMask);
+  if (withDays) writeDays(obj, entry.daysMask);
   obj["duration"] = entry.duration;
   obj["label"] = entry.label;
 }
 
 void buildScheduleDocument(JsonDocument &doc, bool includeLimits) {
-  doc["version"] = 2;
+  doc["version"] = 3;
   if (includeLimits) {
     doc["max_entries"] = static_cast<unsigned>(MAX_ENTRIES);
     doc["max_groups"] = static_cast<unsigned>(MAX_GROUPS);
-    doc["max_exceptions"] = static_cast<unsigned>(MAX_EXCEPTIONS);
+    doc["max_overrides"] = static_cast<unsigned>(MAX_OVERRIDES);
   }
   if (autoStartDate != 0 || autoStopDate != 0) {
     JsonObject autoObj = doc["auto"].to<JsonObject>();
@@ -664,21 +849,32 @@ void buildScheduleDocument(JsonDocument &doc, bool includeLimits) {
     writeDays(groupObj, groups[g].daysMask);
     JsonArray entriesArray = groupObj["entries"].to<JsonArray>();
     for (size_t i = 0; i < entryCount; ++i) {
-      if (entries[i].groupId == groups[g].id) appendEntry(entriesArray, entries[i]);
+      if (entries[i].overrideSlot != 0) continue;
+      if (entries[i].groupId == groups[g].id) appendEntry(entriesArray, entries[i], true);
     }
   }
 
-  JsonArray exceptionsArray = doc["exceptions"].to<JsonArray>();
-  for (size_t i = 0; i < exceptionCount; ++i) {
-    JsonObject obj = exceptionsArray.add<JsonObject>();
-    obj["date"] = formatDateKey(exceptions[i].dateKey);
-    if (exceptions[i].mute) obj["mute"] = true;
-    if (exceptions[i].groupId != 0) obj["group_id"] = exceptions[i].groupId;
+  JsonArray overridesArray = doc["overrides"].to<JsonArray>();
+  for (size_t o = 0; o < overrideCount; ++o) {
+    JsonObject obj = overridesArray.add<JsonObject>();
+    obj["date"] = formatDateKey(overrides[o].dateKey);
+    obj["mode"] = overrideModeName(overrides[o].mode);
+    if (overrides[o].basedOnGroupId != 0) obj["based_on"] = overrides[o].basedOnGroupId;
+    if (overrides[o].mode == OVERRIDE_MUTE) continue;
+    JsonArray entriesArray = obj["entries"].to<JsonArray>();
+    for (size_t i = 0; i < entryCount; ++i) {
+      if (entries[i].overrideSlot == o + 1) {
+        // Weekdays are irrelevant inside an override, so they are not written.
+        appendEntry(entriesArray, entries[i], false);
+      }
+    }
   }
 
-  // Legacy flat view so older clients can still read the schedule.
+  // Legacy flat view so older clients can still read the weekly schedule.
   JsonArray flat = doc["entries"].to<JsonArray>();
-  for (size_t i = 0; i < entryCount; ++i) appendEntry(flat, entries[i]);
+  for (size_t i = 0; i < entryCount; ++i) {
+    if (entries[i].overrideSlot == 0) appendEntry(flat, entries[i], true);
+  }
 }
 
 bool saveScheduleToFlash() {
@@ -814,6 +1010,73 @@ void handleRtcTimers() {
 
 // ------------------------------ Schedule ----------------------------------
 
+// Bells resolved for one date. The buffer is static so the recursion-free
+// evaluation never touches the stack.
+struct DayBell {
+  uint16_t minuteOfDay = 0;
+  uint8_t duration = DEFAULT_RING_SEC;
+  uint16_t entryIndex = 0;
+};
+
+DayBell dayBells[MAX_ENTRIES];
+size_t dayBellCount = 0;
+
+bool autoAllowsDate(uint32_t dateKey) {
+  if (autoStartDate != 0 && dateKey < autoStartDate) return false;
+  if (autoStopDate != 0 && dateKey > autoStopDate) return false;
+  return true;
+}
+
+int findOverrideIndex(uint32_t dateKey) {
+  for (size_t i = 0; i < overrideCount; ++i) {
+    if (overrides[i].dateKey == dateKey) return static_cast<int>(i);
+  }
+  return -1;
+}
+
+void appendDayBell(const ScheduleEntry &entry, size_t index) {
+  if (dayBellCount >= MAX_ENTRIES) return;
+  dayBells[dayBellCount].minuteOfDay = entry.minuteOfDay;
+  dayBells[dayBellCount].duration = entry.duration;
+  dayBells[dayBellCount].entryIndex = static_cast<uint16_t>(index);
+  ++dayBellCount;
+}
+
+// Resolves a date exactly like BellSchedule.bellsFor() in the Android app:
+// auto window, first matching group, then mute / replace / add.
+void collectDayBells(uint32_t dateKey, uint8_t weekdayMask) {
+  dayBellCount = 0;
+  if (!autoAllowsDate(dateKey)) return;
+
+  int overrideIndex = findOverrideIndex(dateKey);
+  const DayOverride *override = overrideIndex >= 0 ? &overrides[overrideIndex] : nullptr;
+  if (override != nullptr && override->mode == OVERRIDE_MUTE) return;
+
+  if (override == nullptr || override->mode == OVERRIDE_ADD) {
+    uint8_t groupId = 0;
+    for (size_t g = 0; g < groupCount; ++g) {
+      if (groups[g].daysMask & weekdayMask) {
+        groupId = groups[g].id;
+        break;
+      }
+    }
+    if (groupId != 0) {
+      for (size_t i = 0; i < entryCount; ++i) {
+        const ScheduleEntry &entry = entries[i];
+        if (entry.overrideSlot != 0 || entry.groupId != groupId) continue;
+        if (entry.daysMask != 0 && (entry.daysMask & weekdayMask) == 0) continue;
+        appendDayBell(entry, i);
+      }
+    }
+  }
+
+  if (override == nullptr) return;
+  uint8_t slot = static_cast<uint8_t>(overrideIndex + 1);
+  for (size_t i = 0; i < entryCount; ++i) {
+    if (entries[i].overrideSlot == slot) appendDayBell(entries[i], i);
+  }
+}
+
 void checkSchedule() {
   if (!timeIsValid() || currentMode != "auto" || ringing) return;
   if (cachedNow.second() != 0) return;
@@ -823,47 +1086,16 @@ void checkSchedule() {
   lastScheduleMinute = key;
   if (suppressMinuteSet && key == suppressMinuteKey) return;
 
-  // Auto mode is limited to the configured date range (if any).
   uint32_t today = dateKeyOf(cachedNow);
-  if (autoStartDate != 0 && today < autoStartDate) return;
-  if (autoStopDate != 0 && today > autoStopDate) return;
+  uint8_t todayMask = static_cast<uint8_t>(1U << (isoWeekday(cachedNow) - 1));
+  collectDayBells(today, todayMask);
 
   uint16_t minuteOfDay =
       static_cast<uint16_t>(cachedNow.hour() * 60 + cachedNow.minute());
-  uint8_t todayMask = static_cast<uint8_t>(1U << (isoWeekday(cachedNow) - 1));
   uint8_t bestDuration = 0;
-
-  const DateException *exception = nullptr;
-  for (size_t i = 0; i < exceptionCount; ++i) {
-    if (exceptions[i].dateKey == today) {
-      exception = &exceptions[i];
-      break;
-    }
-  }
-
-  if (exception != nullptr) {
-    if (exception->mute) return;
-    // An explicit group for this date ignores the group weekday mask.
-    for (size_t i = 0; i < entryCount; ++i) {
-      if (entries[i].groupId == exception->groupId &&
-          entries[i].minuteOfDay == minuteOfDay &&
-          entries[i].duration > bestDuration) {
-        bestDuration = entries[i].duration;
-      }
-    }
-  } else {
-    // First group whose weekday mask matches today is used.
-    for (size_t g = 0; g < groupCount; ++g) {
-      uint8_t activeMask = static_cast<uint8_t>(groups[g].daysMask & todayMask);
-      if (activeMask == 0) continue;
-      for (size_t i = 0; i < entryCount; ++i) {
-        if (entries[i].groupId != groups[g].id) continue;
-        if (entries[i].minuteOfDay != minuteOfDay) continue;
-        if ((entries[i].daysMask & activeMask) == 0) continue;
-        if (entries[i].duration > bestDuration) bestDuration = entries[i].duration;
-      }
-      break;
-    }
+  for (size_t i = 0; i < dayBellCount; ++i) {
+    if (dayBells[i].minuteOfDay != minuteOfDay) continue;
+    if (dayBells[i].duration > bestDuration) bestDuration = dayBells[i].duration;
   }
 
   if (bestDuration > 0) startRing(bestDuration);
@@ -983,7 +1215,14 @@ bool readJsonBody(JsonDocument &doc, const char *&errorCode) {
     errorCode = "invalid_json";
     return false;
   }
-  DeserializationError err = deserializeJson(doc, server.arg("plain"));
+  // Reject oversized documents before ArduinoJson allocates anything, and keep
+  // the nesting shallow so a hostile body cannot exhaust the heap.
+  if (server.arg("plain").length() > MAX_SCHEDULE_BODY_BYTES) {
+    errorCode = "too_many_entries";
+    return false;
+  }
+  DeserializationError err = deserializeJson(
+      doc, server.arg("plain"), DeserializationOption::NestingLimit(8));
   if (err) {
     errorCode = "invalid_json";
     return false;
@@ -1007,7 +1246,7 @@ void sendStatus() {
   doc["ring_default"] = ringDefault;
   doc["entries"] = static_cast<unsigned>(entryCount);
   doc["groups"] = static_cast<unsigned>(groupCount);
-  doc["exceptions"] = static_cast<unsigned>(exceptionCount);
+  doc["overrides"] = static_cast<unsigned>(overrideCount);
   if (autoStartDate != 0 || autoStopDate != 0) {
     JsonObject autoObj = doc["auto"].to<JsonObject>();
     if (autoStartDate != 0) autoObj["start"] = formatDateKey(autoStartDate);
@@ -1019,6 +1258,7 @@ void sendStatus() {
   if (!storageOk) errors.add("storage_error");
   if (!apOk) errors.add("wifi_ap_error");
   doc["fw"] = FW_VERSION;
+  doc["api"] = API_VERSION;
   String payload;
   serializeJson(doc, payload);
   sendJson(200, payload);
@@ -1195,6 +1435,61 @@ void handleGetSchedule() {
   sendJson(200, payload);
 }
 
+// Resolved bell list for one date, useful for checking that the app's preview
+// and the device agree.
+void handleGetScheduleDay() {
+  if (!requireToken()) return;
+  if (!server.hasArg("date")) {
+    sendError(400, "invalid_date");
+    return;
+  }
+  uint32_t dateKey = 0;
+  if (!parseDateKey(server.arg("date"), dateKey)) {
+    sendError(400, "invalid_date");
+    return;
+  }
+
+  uint8_t weekdayMask =
+      static_cast<uint8_t>(1U << (isoWeekdayFromDateKey(dateKey) - 1));
+  collectDayBells(dateKey, weekdayMask);
+
+  // Merge bells that share a minute (keeping the longer duration) and sort by
+  // time into a small scratch buffer.
+  static DayBell merged[MAX_ENTRIES];
+  size_t mergedCount = 0;
+  bool taken[MAX_ENTRIES];
+  for (size_t i = 0; i < dayBellCount; ++i) taken[i] = false;
+  for (size_t i = 0; i < dayBellCount; ++i) {
+    if (taken[i]) continue;
+    DayBell value = dayBells[i];
+    for (size_t j = i + 1; j < dayBellCount; ++j) {
+      if (dayBells[j].minuteOfDay != value.minuteOfDay) continue;
+      taken[j] = true;
+      if (dayBells[j].duration > value.duration) value = dayBells[j];
+    }
+    size_t position = mergedCount;
+    while (position > 0 && merged[position - 1].minuteOfDay > value.minuteOfDay) {
+      merged[position] = merged[position - 1];
+      --position;
+    }
+    merged[position] = value;
+    ++mergedCount;
+  }
+
+  JsonDocument doc;
+  doc["date"] = formatDateKey(dateKey);
+  JsonArray bells = doc["bells"].to<JsonArray>();
+  for (size_t i = 0; i < mergedCount; ++i) {
+    JsonObject obj = bells.add<JsonObject>();
+    obj["time"] = formatTimeOfDay(merged[i].minuteOfDay);
+    obj["duration"] = merged[i].duration;
+    obj["label"] = entries[merged[i].entryIndex].label;
+  }
+  String payload;
+  serializeJson(doc, payload);
+  sendJson(200, payload);
+}
+
 void handlePostSchedule() {
   if (!requireToken()) return;
 
@@ -1211,18 +1506,23 @@ void handlePostSchedule() {
     return;
   }
 
+  if (timeIsValid()) pruneParsedOverrides(dateKeyOf(cachedNow));
+
+  // Commit the validated document, then persist exactly that state. The write
+  // is atomic, so a failure keeps the previous file; reloading it puts the
+  // device back to the schedule it had before this request.
+  applyParsedSchedule();
   if (!saveScheduleToFlash()) {
+    loadScheduleFromFlash();
     sendError(500, "storage_error");
     return;
   }
-
-  applyParsedSchedule();
 
   JsonDocument out;
   out["ok"] = true;
   out["entries"] = static_cast<unsigned>(entryCount);
   out["groups"] = static_cast<unsigned>(groupCount);
-  out["exceptions"] = static_cast<unsigned>(exceptionCount);
+  out["overrides"] = static_cast<unsigned>(overrideCount);
   String payload;
   serializeJson(out, payload);
   sendJson(200, payload);
@@ -1314,7 +1614,8 @@ void setupHttpRoutes() {
   server.enableCORS(true);
 
   const char *paths[] = {"/",     "/status", "/ring",    "/stop",
-                         "/mode", "/time",   "/schedule", "/settings"};
+                         "/mode", "/time",   "/schedule", "/settings",
+                         "/schedule/day"};
   for (const char *path : paths) {
     server.on(path, HTTP_OPTIONS, handleOptions);
   }
@@ -1328,6 +1629,7 @@ void setupHttpRoutes() {
   server.on("/time", HTTP_POST, handlePostTime);
   server.on("/schedule", HTTP_GET, handleGetSchedule);
   server.on("/schedule", HTTP_POST, handlePostSchedule);
+  server.on("/schedule/day", HTTP_GET, handleGetScheduleDay);
   server.on("/settings", HTTP_GET, handleGetSettings);
   server.on("/settings", HTTP_POST, handlePostSettings);
   server.onNotFound(handleNotFound);
