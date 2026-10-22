@@ -1,23 +1,21 @@
 package com.belltimer.app.ui
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Sync
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -31,64 +29,66 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.belltimer.app.AppViewModel
 import com.belltimer.app.R
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BellTimerApp(viewModel: AppViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     val snackbarHostState = remember { SnackbarHostState() }
+    val undoLabel = stringResource(R.string.undo)
+    val openIssueLabel = stringResource(R.string.schedule_issue_open)
 
-    LaunchedEffect(state.message) {
-        val message = state.message
-        if (message != null) {
-            snackbarHostState.showSnackbar(message)
-            viewModel.clearMessage()
+    LaunchedEffect(state.message, state.undoAvailable, state.scheduleIssue) {
+        val message = state.message ?: return@LaunchedEffect
+        val actionLabel = when {
+            state.undoAvailable -> undoLabel
+            state.scheduleIssue != null -> openIssueLabel
+            else -> null
         }
-    }
-
-    if (state.syncPromptVisible) {
-        AlertDialog(
-            onDismissRequest = viewModel::dismissSyncPrompt,
-            icon = { Icon(Icons.Default.Sync, contentDescription = null) },
-            title = { Text(stringResource(R.string.sync_time_title)) },
-            text = { Text(stringResource(R.string.sync_time_message)) },
-            confirmButton = {
-                TextButton(onClick = viewModel::confirmSyncTime) {
-                    Text(stringResource(R.string.sync_time_confirm))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = viewModel::dismissSyncPrompt) {
-                    Text(stringResource(R.string.sync_time_later))
-                }
-            },
+        val result = snackbarHostState.showSnackbar(
+            message = message,
+            actionLabel = actionLabel,
+            duration = if (actionLabel != null) SnackbarDuration.Long else SnackbarDuration.Short,
         )
+        if (result == SnackbarResult.ActionPerformed) {
+            if (state.undoAvailable) {
+                viewModel.undoLastScheduleChange()
+            } else {
+                selectedTab = 1
+            }
+        }
+        viewModel.clearMessage()
     }
 
     Scaffold(
-        topBar = {
-            TopAppBar(title = { Text(stringResource(R.string.app_name)) })
-        },
         bottomBar = {
-            NavigationBar {
-                NavigationBarItem(
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
-                    icon = { Icon(Icons.Default.Home, contentDescription = null) },
-                    label = { Text(stringResource(R.string.tab_control)) },
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
-                    icon = { Icon(Icons.Default.Schedule, contentDescription = null) },
-                    label = { Text(stringResource(R.string.tab_schedule)) },
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 2,
-                    onClick = { selectedTab = 2 },
-                    icon = { Icon(Icons.Default.Settings, contentDescription = null) },
-                    label = { Text(stringResource(R.string.tab_settings)) },
-                )
+            Column {
+                if (state.scheduleDirty) {
+                    DirtyBar(
+                        onSend = viewModel::sendSchedule,
+                        onDiscard = viewModel::discardScheduleChanges,
+                        enabled = !state.busy,
+                    )
+                }
+                NavigationBar {
+                    NavigationBarItem(
+                        selected = selectedTab == 0,
+                        onClick = { selectedTab = 0 },
+                        icon = { Icon(Icons.Default.Home, contentDescription = null) },
+                        label = { Text(stringResource(R.string.tab_control)) },
+                    )
+                    NavigationBarItem(
+                        selected = selectedTab == 1,
+                        onClick = { selectedTab = 1 },
+                        icon = { Icon(Icons.Default.Schedule, contentDescription = null) },
+                        label = { Text(stringResource(R.string.tab_schedule)) },
+                    )
+                    NavigationBarItem(
+                        selected = selectedTab == 2,
+                        onClick = { selectedTab = 2 },
+                        icon = { Icon(Icons.Default.Settings, contentDescription = null) },
+                        label = { Text(stringResource(R.string.tab_settings)) },
+                    )
+                }
             }
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },

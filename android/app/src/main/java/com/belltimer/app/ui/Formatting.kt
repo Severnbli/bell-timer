@@ -1,13 +1,38 @@
 package com.belltimer.app.ui
 
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import com.belltimer.app.R
+import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 
-private val DEVICE_TIME_FORMATTER: DateTimeFormatter =
-    DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm:ss")
+private val DEVICE_DATE_TIME = DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm:ss")
+private val DEVICE_TIME = DateTimeFormatter.ofPattern("HH:mm:ss")
+private val SHORT_DATE = DateTimeFormatter.ofPattern("dd.MM")
+private val FULL_DATE = DateTimeFormatter.ofPattern("dd.MM.yyyy")
+private val MONTH_YEAR = DateTimeFormatter.ofPattern("LLLL yyyy", Locale("ru"))
 
-fun LocalDateTime.deviceDisplay(): String = format(DEVICE_TIME_FORMATTER)
+/** Times and countdowns use tabular digits so they do not jitter. */
+val TabularNumbers = TextStyle(fontFeatureSettings = "tnum")
+
+val TabularLarge = TextStyle(
+    fontFamily = FontFamily.Default,
+    fontWeight = FontWeight.SemiBold,
+    fontFeatureSettings = "tnum",
+)
+
+fun LocalDateTime.deviceDisplay(): String = format(DEVICE_DATE_TIME)
+
+fun LocalDateTime.deviceClock(): String = format(DEVICE_TIME)
+
+fun LocalDate.shortDate(): String = format(SHORT_DATE)
+
+fun LocalDate.fullDate(): String = format(FULL_DATE)
+
+fun LocalDate.monthTitle(): String = format(MONTH_YEAR)
 
 fun dayLabelRes(day: Int): Int = when (day) {
     1 -> R.string.days_mon

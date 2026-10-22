@@ -1,23 +1,18 @@
 package com.belltimer.app.ui
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -33,15 +28,14 @@ import androidx.compose.ui.unit.dp
 import com.belltimer.app.R
 import com.belltimer.app.data.MAX_RING_SECONDS
 import com.belltimer.app.data.MIN_RING_SECONDS
-import com.belltimer.app.data.QUICK_RING_SECONDS_MAX
+import com.belltimer.app.data.SLIDER_MAX_SECONDS
 import kotlin.math.roundToInt
 
 /**
- * Bell duration selector: a progress-bar style slider over the full 1..60 s
- * range plus quick chips for the common 1..10 s values. The "Другое" chip
- * reveals a free-form field.
+ * Bell duration: a 1..10 s slider plus an opt-in free field for 1..60 s.
+ * The same control is used on the control screen, in settings and in every
+ * bell editor.
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun RingDurationPicker(
     seconds: Int,
@@ -49,15 +43,17 @@ fun RingDurationPicker(
     modifier: Modifier = Modifier,
     label: String? = null,
 ) {
-    var customMode by rememberSaveable { mutableStateOf(seconds > QUICK_RING_SECONDS_MAX) }
+    var customMode by rememberSaveable { mutableStateOf(seconds > SLIDER_MAX_SECONDS) }
     var customText by rememberSaveable { mutableStateOf(seconds.toString()) }
 
-    // Keep the free-form text in sync when the value is changed from outside.
+    // Keep the field in sync when the value changes from outside.
     LaunchedEffect(seconds) {
-        if (seconds.toString() != customText) customText = seconds.toString()
+        if (seconds in MIN_RING_SECONDS..MAX_RING_SECONDS && customText != seconds.toString()) {
+            customText = seconds.toString()
+        }
     }
 
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         if (label != null) {
             Text(
                 text = label,
@@ -66,66 +62,42 @@ fun RingDurationPicker(
             )
         }
 
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = MIN_RING_SECONDS.toString(),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Slider(
-                value = seconds.toFloat(),
-                onValueChange = { value ->
-                    onSecondsChange(
-                        value.roundToInt().coerceIn(MIN_RING_SECONDS, MAX_RING_SECONDS),
-                    )
-                },
-                valueRange = MIN_RING_SECONDS.toFloat()..MAX_RING_SECONDS.toFloat(),
-                steps = MAX_RING_SECONDS - MIN_RING_SECONDS - 1,
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(horizontal = 8.dp),
-            )
-            Text(
-                text = stringResource(R.string.duration_seconds, seconds),
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold,
-            )
-        }
-
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            for (value in MIN_RING_SECONDS..QUICK_RING_SECONDS_MAX) {
-                FilterChip(
-                    selected = !customMode && seconds == value,
-                    onClick = {
-                        customMode = false
-                        onSecondsChange(value)
+        if (!customMode) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Slider(
+                    value = seconds.coerceIn(MIN_RING_SECONDS, SLIDER_MAX_SECONDS).toFloat(),
+                    onValueChange = { value ->
+                        onSecondsChange(
+                            value.roundToInt().coerceIn(MIN_RING_SECONDS, SLIDER_MAX_SECONDS),
+                        )
                     },
-                    label = { Text(value.toString()) },
+                    valueRange = MIN_RING_SECONDS.toFloat()..SLIDER_MAX_SECONDS.toFloat(),
+                    steps = SLIDER_MAX_SECONDS - MIN_RING_SECONDS - 1,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    text = stringResource(
+                        R.string.duration_seconds,
+                        seconds.coerceIn(MIN_RING_SECONDS, SLIDER_MAX_SECONDS),
+                    ),
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontFeatureSettings = TabularNumbers.fontFeatureSettings,
+                    ),
+                    fontWeight = FontWeight.SemiBold,
                 )
             }
-            FilterChip(
-                selected = customMode,
-                onClick = { customMode = true },
-                label = { Text(stringResource(R.string.duration_other)) },
-                leadingIcon = if (customMode) {
-                    {
-                        Icon(
-                            Icons.Default.Edit,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp),
-                        )
-                    }
-                } else {
-                    null
+            TextButton(
+                onClick = {
+                    customText = seconds.toString()
+                    customMode = true
                 },
-            )
-        }
-
-        AnimatedVisibility(visible = customMode) {
+            ) {
+                Text(stringResource(R.string.duration_custom))
+            }
+        } else {
             val parsed = customText.toIntOrNull()
+            val valid = parsed != null && parsed in MIN_RING_SECONDS..MAX_RING_SECONDS
             OutlinedTextField(
                 value = customText,
                 onValueChange = { value ->
@@ -137,21 +109,34 @@ fun RingDurationPicker(
                     }
                 },
                 label = { Text(stringResource(R.string.duration_custom_label)) },
-                supportingText = {
-                    Text(
-                        stringResource(
-                            R.string.duration_range_hint,
-                            MIN_RING_SECONDS,
-                            MAX_RING_SECONDS,
-                        ),
-                    )
-                },
-                isError = customText.isNotEmpty() &&
-                    (parsed == null || parsed !in MIN_RING_SECONDS..MAX_RING_SECONDS),
                 singleLine = true,
+                isError = customText.isNotEmpty() && !valid,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 56.dp),
             )
+            if (customText.isNotEmpty() && !valid) {
+                Text(
+                    text = stringResource(
+                        R.string.duration_range_hint,
+                        MIN_RING_SECONDS,
+                        MAX_RING_SECONDS,
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            TextButton(
+                onClick = {
+                    customMode = false
+                    // The slider cannot show a larger value, so it takes the
+                    // largest one it can represent.
+                    onSecondsChange(seconds.coerceIn(MIN_RING_SECONDS, SLIDER_MAX_SECONDS))
+                },
+            ) {
+                Text(stringResource(R.string.duration_back_to_slider))
+            }
         }
     }
 }
