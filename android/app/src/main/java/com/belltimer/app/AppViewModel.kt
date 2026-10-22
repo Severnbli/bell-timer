@@ -3,22 +3,27 @@ package com.belltimer.app
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.belltimer.app.data.API_SPECIAL_DAYS
 import com.belltimer.app.data.ApiClient
 import com.belltimer.app.data.ApiException
 import com.belltimer.app.data.AppSettings
 import com.belltimer.app.data.BellSchedule
 import com.belltimer.app.data.DEFAULT_RING_SECONDS
+import com.belltimer.app.data.DayOverride
 import com.belltimer.app.data.DeviceStatus
-import com.belltimer.app.data.MAX_DATE_EXCEPTIONS
+import com.belltimer.app.data.MAX_DATE_OVERRIDES
 import com.belltimer.app.data.MAX_RING_SECONDS
 import com.belltimer.app.data.MAX_SCHEDULE_ENTRIES
 import com.belltimer.app.data.MAX_SCHEDULE_GROUPS
 import com.belltimer.app.data.MIN_RING_SECONDS
 import com.belltimer.app.data.ScheduleCodec
+import com.belltimer.app.data.ScheduleIssue
 import com.belltimer.app.data.SettingsStore
+import com.belltimer.app.data.canAddOverride
 import com.belltimer.app.data.normalizeBaseUrl
 import com.belltimer.app.data.toDomain
 import com.belltimer.app.data.toDto
+import com.belltimer.app.data.validate
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -28,10 +33,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
-import java.time.temporal.ChronoUnit
-import kotlin.math.abs
 
 enum class ConnectionState { Connecting, Online, Offline }
 
@@ -47,10 +51,15 @@ data class UiState(
     val loadingSchedule: Boolean = false,
     val busy: Boolean = false,
     val message: String? = null,
-    val syncPromptVisible: Boolean = false,
+    val undoAvailable: Boolean = false,
+    val scheduleIssue: ScheduleIssue? = null,
     val ringSeconds: Int = DEFAULT_RING_SECONDS,
     val deviceRingDefault: Int? = null,
-)
+    /** API level reported by the device; 2 until the first status response. */
+    val apiVersion: Int = 2,
+) {
+    val supportsSpecialDays: Boolean get() = apiVersion >= API_SPECIAL_DAYS
+}
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -67,7 +76,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val state: StateFlow<UiState> = _state.asStateFlow()
 
     private var pollJob: Job? = null
-    private var syncPromptShown = false
+    private var undoSnapshot: BellSchedule? = null
 
     init {
         api.updateSettings(initialSettings)
@@ -107,8 +116,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val snapshot = _state.value
             val shouldLoadSchedule =
                 !snapshot.scheduleLoadAttempted && !snapshot.scheduleDirty
-            val prompt = !syncPromptShown && needsSyncPrompt(domain)
-            if (prompt) syncPromptShown = true
 
             _state.update {
                 it.copy(
@@ -116,7 +123,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     status = domain,
                     lastError = null,
                     deviceRingDefault = domain.ringDefault,
-                    syncPromptVisible = it.syncPromptVisible || prompt,
+                    apiVersion = domain.api,
                     scheduleLoadAttempted = it.scheduleLoadAttempted || shouldLoadSchedule,
                 )
             }
@@ -222,7 +229,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val now = LocalDateTime.now().withNano(0)
         val payload = now.format(API_DATE_TIME_FORMAT)
         viewModelScope.launch {
-            _state.update { it.copy(busy = true, syncPromptVisible = false) }
+            _state.update { it.copy(busy = true) }
             try {
                 val response = api.setTime(payload)
                 if (!response.ok) {
@@ -244,16 +251,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun confirmSyncTime() {
-        setTimeFromPhone()
-    }
-
-    fun dismissSyncPrompt() {
-        _state.update { it.copy(syncPromptVisible = false) }
-    }
-
     fun loadSchedule() {
         viewModelScope.launch { loadScheduleInternal(showSuccessMessage = true) }
+    }
+
+    /** Drops local edits and reloads the schedule from the device. */
+    fun discardScheduleChanges() {
+        viewModelScope.launch { loadScheduleInternal(showSuccessMessage = false) }
     }
 
     private suspend fun loadScheduleInternal(showSuccessMessage: Boolean) {
@@ -261,6 +265,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _state.update { it.copy(loadingSchedule = true) }
         try {
             val schedule = api.getSchedule().toDomain()
+            undoSnapshot = null
             _state.update {
                 it.copy(
                     loadingSchedule = false,
@@ -268,6 +273,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     scheduleDirty = false,
                     scheduleLoaded = true,
                     scheduleLoadAttempted = true,
+                    undoAvailable = false,
+                    scheduleIssue = null,
                     lastError = null,
                     message = if (showSuccessMessage) {
                         getApplication<Application>().getString(R.string.schedule_loaded)
@@ -289,50 +296,110 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun updateSchedule(schedule: BellSchedule) {
+    /**
+     * Replaces the in-memory schedule. Every edit funnels through here, so
+     * [undoable] edits can be rolled back with [undoLastScheduleChange].
+     */
+    fun updateSchedule(schedule: BellSchedule, undoable: Boolean = false) {
+        val previous = _state.value.schedule
+        if (undoable && previous != schedule) {
+            undoSnapshot = previous
+            _state.update {
+                it.copy(
+                    schedule = schedule,
+                    scheduleDirty = true,
+                    scheduleLoaded = true,
+                    undoAvailable = true,
+                )
+            }
+        } else {
+            _state.update {
+                it.copy(
+                    schedule = schedule,
+                    scheduleDirty = true,
+                    scheduleLoaded = true,
+                )
+            }
+        }
+    }
+
+    fun undoLastScheduleChange() {
+        val snapshot = undoSnapshot ?: return
+        undoSnapshot = null
         _state.update {
             it.copy(
-                schedule = schedule,
+                schedule = snapshot,
                 scheduleDirty = true,
                 scheduleLoaded = true,
+                undoAvailable = false,
             )
         }
     }
 
-    fun saveSchedule() {
+    /** Creates one override per date, skipping dates that already have one. */
+    fun addOverrides(template: DayOverride, dates: List<LocalDate>) {
+        var current = _state.value.schedule
+        var added = 0
+        var limited = false
+        for (date in dates) {
+            if (current.overrideFor(date) != null) continue
+            if (!current.canAddOverride()) {
+                limited = true
+                continue
+            }
+            current = current.withOverride(template.copy(date = date))
+            added++
+        }
+        if (added > 0) updateSchedule(current, undoable = true)
+        val context = getApplication<Application>()
+        val message = if (added == 0 && limited) {
+            context.getString(R.string.day_repeat_limit, MAX_DATE_OVERRIDES)
+        } else {
+            context.getString(R.string.day_repeat_created, added)
+        }
+        _state.update { it.copy(message = message) }
+    }
+
+    /** Validates and sends the whole schedule, then verifies the device copy. */
+    fun sendSchedule() {
         if (_state.value.busy) return
-        val schedule = _state.value.schedule
-        if (!schedule.auto.isValid) {
-            _state.update {
-                it.copy(
-                    message = getApplication<Application>().getString(R.string.schedule_auto_invalid),
-                )
-            }
+        val current = _state.value
+        val issue = current.schedule.validate(current.apiVersion)
+        if (issue != null) {
+            _state.update { it.copy(scheduleIssue = issue, message = describeIssue(issue)) }
             return
         }
-        if (!withinDeviceLimits(schedule)) {
-            _state.update {
-                it.copy(
-                    message = getApplication<Application>().getString(R.string.schedule_too_large),
-                )
-            }
-            return
-        }
+        val expected = current.schedule.totalEntries
         viewModelScope.launch {
-            _state.update { it.copy(busy = true) }
+            _state.update { it.copy(busy = true, scheduleIssue = null) }
             try {
-                val response = api.saveSchedule(schedule.toDto())
+                val response = api.saveSchedule(current.schedule.toDto())
                 if (!response.ok) {
                     throw ApiException.Http(400, response.error ?: "invalid_schedule")
                 }
+                val reloaded = api.getSchedule().toDomain()
+                val actual = reloaded.totalEntries
+                undoSnapshot = null
                 _state.update {
                     it.copy(
                         busy = false,
+                        lastError = null,
+                        // The device is the authority: adopt what it stored and
+                        // only report the count when it differs from the payload.
+                        schedule = reloaded,
                         scheduleDirty = false,
                         scheduleLoaded = true,
-                        lastError = null,
-                        message = getApplication<Application>().getString(R.string.schedule_saved),
-                        status = it.status?.copy(entries = schedule.totalEntries),
+                        undoAvailable = false,
+                        scheduleIssue = null,
+                        status = it.status?.copy(entries = actual),
+                        message = getApplication<Application>().getString(
+                            if (actual == expected) {
+                                R.string.schedule_sent_verified
+                            } else {
+                                R.string.schedule_sent_mismatch
+                            },
+                            actual,
+                        ),
                     )
                 }
             } catch (e: CancellationException) {
@@ -341,6 +408,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 handleActionError(e)
             }
         }
+    }
+
+    fun consumeScheduleIssue() {
+        _state.update { it.copy(scheduleIssue = null) }
     }
 
     /** Returns the current schedule as pretty-printed JSON, or null when empty. */
@@ -382,11 +453,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             }
             return
         }
+        undoSnapshot = _state.value.schedule
         _state.update {
             it.copy(
                 schedule = imported,
                 scheduleDirty = true,
                 scheduleLoaded = true,
+                undoAvailable = true,
+                scheduleIssue = null,
                 message = getApplication<Application>().getString(
                     R.string.schedule_import_success,
                     imported.totalEntries,
@@ -398,7 +472,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private fun withinDeviceLimits(schedule: BellSchedule): Boolean =
         schedule.groups.size <= MAX_SCHEDULE_GROUPS &&
             schedule.totalEntries <= MAX_SCHEDULE_ENTRIES &&
-            schedule.exceptions.size <= MAX_DATE_EXCEPTIONS
+            schedule.overrides.size <= MAX_DATE_OVERRIDES
 
     fun saveSettings(baseUrl: String, token: String, ringDefault: Int) {
         val normalizedUrl = normalizeBaseUrl(baseUrl)
@@ -423,7 +497,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         )
         store.save(updated)
         api.updateSettings(updated)
-        syncPromptShown = false
 
         val urlChanged = old.baseUrl != updated.baseUrl
         _state.update { current ->
@@ -431,17 +504,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 settings = updated,
                 ringSeconds = updated.ringDefault,
                 busy = true,
-                syncPromptVisible = false,
                 message = null,
                 status = if (urlChanged) null else current.status,
                 schedule = if (urlChanged) BellSchedule() else current.schedule,
                 scheduleDirty = if (urlChanged) false else current.scheduleDirty,
                 scheduleLoaded = if (urlChanged) false else current.scheduleLoaded,
                 scheduleLoadAttempted = if (urlChanged) false else current.scheduleLoadAttempted,
+                scheduleIssue = if (urlChanged) null else current.scheduleIssue,
+                undoAvailable = if (urlChanged) false else current.undoAvailable,
                 connection = if (urlChanged) ConnectionState.Connecting else current.connection,
                 lastError = if (urlChanged) null else current.lastError,
             )
         }
+        if (urlChanged) undoSnapshot = null
 
         viewModelScope.launch {
             var deviceSaved = false
@@ -468,21 +543,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun refreshDeviceSettings() {
-        viewModelScope.launch {
-            if (_state.value.connection != ConnectionState.Online) return@launch
-            try {
-                val settings = api.getSettings()
-                _state.update { it.copy(deviceRingDefault = settings.ringDefault) }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Throwable) {
-                // The status response already carries ring_default; ignore this
-                // supplementary request failure.
-            }
-        }
-    }
-
     fun setRingSeconds(seconds: Int) {
         _state.update { it.copy(ringSeconds = seconds.coerceIn(MIN_RING_SECONDS, MAX_RING_SECONDS)) }
     }
@@ -493,6 +553,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun reportMessage(message: String) {
         _state.update { it.copy(message = message) }
+    }
+
+    private fun describeIssue(issue: ScheduleIssue): String {
+        val context = getApplication<Application>()
+        return when (issue) {
+            is ScheduleIssue.AutoWindowInvalid -> context.getString(R.string.schedule_auto_invalid)
+            is ScheduleIssue.ScheduleWithoutDays -> context.getString(R.string.schedule_without_days)
+            is ScheduleIssue.OverlappingWeekdays -> context.getString(R.string.schedule_overlap_error)
+            is ScheduleIssue.TooManyEntries -> context.getString(R.string.error_too_many_entries)
+            is ScheduleIssue.TooManyGroups -> context.getString(R.string.error_too_many_groups)
+            is ScheduleIssue.TooManyOverrides -> context.getString(R.string.error_too_many_overrides)
+            is ScheduleIssue.FirmwareTooOld -> context.getString(R.string.schedule_needs_new_firmware)
+        }
     }
 
     private fun handleActionError(e: Throwable) {
@@ -509,13 +582,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 message = text,
             )
         }
-    }
-
-    private fun needsSyncPrompt(status: DeviceStatus): Boolean {
-        if (!status.rtcOk) return true
-        val deviceTime = status.time ?: return true
-        val drift = abs(ChronoUnit.SECONDS.between(deviceTime, LocalDateTime.now()))
-        return drift > MAX_CLOCK_DRIFT_SECONDS
     }
 
     private fun mapError(e: Throwable): String {
@@ -537,12 +603,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 "invalid_request" -> context.getString(R.string.error_invalid_request)
                 "too_many_entries" -> context.getString(R.string.error_too_many_entries)
                 "too_many_groups" -> context.getString(R.string.error_too_many_groups)
+                "too_many_overrides" -> context.getString(R.string.error_too_many_overrides)
                 "too_many_exceptions" -> context.getString(R.string.error_too_many_exceptions)
                 "invalid_ring_default" -> context.getString(R.string.error_invalid_ring_default)
                 "invalid_json" -> context.getString(R.string.error_invalid_json)
                 "storage_error" -> context.getString(R.string.error_storage_device)
                 "rtc_not_found" -> context.getString(R.string.error_rtc_device)
                 "not_found" -> context.getString(R.string.error_not_found)
+                "invalid_date" -> context.getString(R.string.error_invalid_date)
                 else -> if (e.code >= 500) {
                     context.getString(R.string.error_http, e.code)
                 } else {
@@ -558,7 +626,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private companion object {
         const val POLL_INTERVAL_MS = 2_000L
-        const val MAX_CLOCK_DRIFT_SECONDS = 5L
         val API_DATE_TIME_FORMAT: DateTimeFormatter =
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")
     }
