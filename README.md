@@ -14,6 +14,7 @@ scripts/gen-config.sh                .env -> firmware/SchoolBell/app_config.h
 scripts/build-firmware.sh            arduino-cli build helper
 scripts/flash-firmware.sh            build, upload, then reset app_config.h
 scripts/api-test.sh                  curl test for every HTTP endpoint
+flash-firmware.sh                    convenience wrapper for the flash script
 .env.example                         template for the firmware configuration
 README.md
 ```
@@ -118,14 +119,18 @@ arduino-cli monitor -p /dev/ttyUSB0 -c baudrate=115200
 Or build, upload and restore the default config in one step:
 
 ```bash
-scripts/flash-firmware.sh --port /dev/ttyUSB0
+./flash-firmware.sh
 ```
 
-`scripts/flash-firmware.sh` runs the build script, uploads the result and then
-rewrites `firmware/SchoolBell/app_config.h` with the defaults from
-`.env.example`, so your real SSID, password and token are not left in the
-generated header afterwards. The next build renders `.env` again; pass
-`--no-reset` to keep the generated header with your values.
+The serial port is detected automatically (`arduino-cli board list`), so no
+arguments are needed when a single board is connected. The script runs the build
+script, uploads the result and then rewrites `firmware/SchoolBell/app_config.h`
+with the defaults from `.env.example`, so your real SSID, password and token are
+not left in the generated header. The next build renders `.env` again.
+
+Use `--port /dev/ttyUSB0` when several boards are connected and `--no-reset` to
+keep the generated header with your values. `scripts/flash-firmware.sh` is the
+same script; the root `flash-firmware.sh` is a thin wrapper for convenience.
 
 On Linux, the serial port may be `/dev/ttyACM0` or `/dev/ttyUSB0`; the user must
 have permission to access it. Board settings in the IDE: **ESP32 Dev Module**,
