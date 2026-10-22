@@ -1,1 +1,363 @@
-# bell-timer
+# SchoolBell — programmable school bell on ESP32
+
+SchoolBell is a standalone school bell timer. The ESP32 keeps a bell schedule in
+flash, switches a relay at the configured times and creates its own Wi-Fi access
+point. An Android app joins that access point and controls the device over HTTP.
+No router, internet connection or NTP server is required.
+
+## Repository layout
+
+```
+firmware/SchoolBell/SchoolBell.ino   ESP32 firmware (single sketch)
+android/                             Android Studio project (Kotlin + Compose)
+scripts/build-firmware.sh            arduino-cli build helper
+scripts/api-test.sh                  curl test for every HTTP endpoint
+README.md
+```
+
+## Hardware
+
+| Function | ESP32 pin | Notes |
+| --- | --- | --- |
+| DS3231 SDA | GPIO21 | I2C, address `0x68`, RTC stores **local** time |
+| DS3231 SCL | GPIO22 | I2C |
+| Relay IN | GPIO26 | 5 V relay module with optocoupler, **active LOW** |
+| Status LED | GPIO27 | KY-029 signal pin, active HIGH |
+
+The relay is forced OFF at boot: GPIO26 is driven HIGH before it becomes an
+output. There are no buttons or switches. Power the board from USB 5 V.
+
+The DS3231 must have a working backup battery (usually CR2032). Without it the
+oscillator-stop flag is set after every power loss and the device reports
+`time_not_set` until the time is set from the app.
+
+## Toolchain used and verified
+
+Firmware:
+
+- `arduino-cli` 1.5.1
+- Arduino-ESP32 core **3.3.12**
+- FQBN `esp32:esp32:esp32` (ESP32 Dev Module, 4 MB flash, default partition)
+- RTClib 2.1.4 (pulls Adafruit BusIO 1.17.4)
+- ArduinoJson 7.4.3
+- `WebServer`, `LittleFS` and `Wire` are bundled with the ESP32 core
+
+Android:
+
+- JDK 17
+- Gradle 9.6.0 (wrapper included)
+- Android Gradle plugin 9.4.1
+- Kotlin 2.4.21 and the Compose compiler plugin 2.4.21
+- Compose BOM 2026.09.00, Material 3
+- `compileSdk` / `targetSdk` 37, `minSdk` 26
+- OkHttp 4.12.0, kotlinx.serialization 1.9.0, coroutines 1.10.2
+
+## System configuration
+
+Install the following once on the build machine:
+
+```bash
+# ESP32 toolchain
+arduino-cli core install esp32:esp32
+arduino-cli lib install "RTClib"
+arduino-cli lib install "ArduinoJson"
+
+# Android SDK (command-line tools, no Android Studio required)
+export ANDROID_HOME="$HOME/Android/Sdk"
+export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+sdkmanager "platform-tools" "platforms;android-37.0" "build-tools;37.0.0"
+yes | sdkmanager --licenses
+sdkmanager --list_installed
+```
+
+Requirements:
+
+- JDK 17 (`JAVA_HOME` must point to it). The project is verified with OpenJDK
+  17.0.20; AGP 9.4 requires JDK 17.
+- `ANDROID_HOME` (or `ANDROID_SDK_ROOT`) must point to the SDK that has platform
+  37 installed. AGP 9.4 also accepts build-tools 36.0.0 and installs it
+  automatically if missing.
+- No `local.properties` is needed when `ANDROID_HOME` is set. If your SDK is in
+  a custom location, create `android/local.properties` with
+  `sdk.dir=/absolute/path/to/Sdk` (the file is git-ignored).
+
+## Build the firmware
+
+```bash
+scripts/build-firmware.sh
+# or directly:
+arduino-cli compile --fqbn esp32:esp32:esp32 firmware/SchoolBell
+```
+
+Flash it and open the serial monitor:
+
+```bash
+arduino-cli upload -p /dev/ttyUSB0 --fqbn esp32:esp32:esp32 firmware/SchoolBell
+arduino-cli monitor -p /dev/ttyUSB0 -c baudrate=115200
+```
+
+On Linux, the serial port may be `/dev/ttyACM0` or `/dev/ttyUSB0`; the user must
+have permission to access it. Board settings in the IDE: **ESP32 Dev Module**,
+upload speed 921600 or 115200, flash size 4 MB, partition scheme "Default 4MB
+with spiffs (1.2MB APP/1.5MB SPIFFS)".
+
+## Build and install the Android app
+
+```bash
+cd android
+./gradlew assembleDebug
+./gradlew lint
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+The APK is produced at
+`android/app/build/outputs/apk/debug/app-debug.apk`.
+
+## Using the device
+
+1. Power the ESP32. It creates the Wi-Fi network **SchoolBell** with password
+   `bell12345`, channel 6, at most 4 clients, address `192.168.4.1`.
+2. Join that network on the phone. It has no internet access; Android may warn
+   about this and may prefer mobile data. The app binds its HTTP sockets to the
+   Wi-Fi network with `Network.socketFactory`, so the device is still reachable.
+3. Open the app. On first connection, if the RTC is missing or the drift is more
+   than 5 seconds, the app offers to set the device time from the phone.
+4. Review or edit the schedule. The first save replaces the whole schedule on
+   the device.
+5. Choose **Авто** to follow the schedule, or **Ручной** to disable the schedule;
+   manual ringing always works.
+
+The firmware SSID, password, channel and optional API token are constants at the
+top of `firmware/SchoolBell/SchoolBell.ino`:
+
+```cpp
+const char *const AP_SSID = "SchoolBell";
+const char *const AP_PASSWORD = "bell12345";
+const char *const API_TOKEN = "";  // empty disables X-Token checking
+```
+
+If `API_TOKEN` is non-empty, every API request (including `GET /`) must send the
+header `X-Token: <value>`. CORS preflight `OPTIONS` requests are exempt because
+browsers do not attach custom headers to them. Tokens can also be supplied as a
+`?token=` query parameter; the built-in HTML page has a token input.
+
+## HTTP API
+
+- Base URL: `http://192.168.4.1`
+- Port 80, JSON in UTF-8
+- All responses include CORS headers (`Access-Control-Allow-Origin: *`), and
+  every endpoint answers `OPTIONS` preflight with HTTP 204.
+- Errors return `{"ok":false,"error":"..."}` with a 4xx/5xx status.
+- Optional authentication header: `X-Token` (not required for OPTIONS).
+- Time format: `YYYY-MM-DDTHH:MM:SS`, local time.
+
+### Status
+
+```bash
+curl -s http://192.168.4.1/status
+```
+
+```json
+{
+  "time": "2026-10-22T12:36:46",
+  "rtc_ok": true,
+  "mode": "auto",
+  "ringing": false,
+  "ring_left": 0,
+  "ring_default": 5,
+  "entries": 12,
+  "errors": [],
+  "fw": "1.0.0"
+}
+```
+
+`time` is `null` when the RTC is missing or the time is not valid.
+
+### Ring and stop
+
+```bash
+# JSON body
+curl -s -X POST http://192.168.4.1/ring \
+  -H 'Content-Type: application/json' \
+  -d '{"sec":5}'
+
+# Query parameter
+curl -s -X POST 'http://192.168.4.1/ring?sec=5'
+
+# Without sec, ring_default is used
+curl -s -X POST http://192.168.4.1/ring
+
+curl -s -X POST http://192.168.4.1/stop
+```
+
+`sec` must be an integer from 1 to 60. The relay is always turned off by the
+main loop when the duration expires; `/stop` cancels immediately.
+
+### Mode
+
+```bash
+curl -s http://192.168.4.1/mode
+curl -s -X POST http://192.168.4.1/mode \
+  -H 'Content-Type: application/json' -d '{"mode":"auto"}'
+curl -s -X POST http://192.168.4.1/mode \
+  -H 'Content-Type: application/json' -d '{"mode":"manual"}'
+```
+
+The mode is stored in flash and survives power loss. The schedule rings only in
+`auto` mode and only while the RTC time is valid.
+
+### Time
+
+```bash
+curl -s -X POST http://192.168.4.1/time \
+  -H 'Content-Type: application/json' \
+  -d "{\"datetime\":\"$(date +%Y-%m-%dT%H:%M:%S)\"}"
+```
+
+The value is the phone's local time. The minute in which the time was set is
+never used to ring a bell. Returns 503 `rtc_not_found` if the DS3231 does not
+respond.
+
+### Schedule
+
+```bash
+curl -s http://192.168.4.1/schedule
+```
+
+```json
+{
+  "entries": [
+    {
+      "time": "08:30",
+      "days": [1, 2, 3, 4, 5],
+      "duration": 5,
+      "label": "1 урок"
+    }
+  ]
+}
+```
+
+Days are ISO weekdays: `1` = Monday, `7` = Sunday. When `days` is omitted in a
+request, all days are used. `duration` is 1–60 seconds and defaults to the
+device's `ring_default`. Labels are UTF-8 and truncated to approximately 15
+Cyrillic characters at a UTF-8 boundary. Up to 64 entries are accepted.
+
+Replace the whole schedule:
+
+```bash
+curl -s -X POST http://192.168.4.1/schedule \
+  -H 'Content-Type: application/json' \
+  -d '{"entries":[{"time":"08:30","days":[1,2,3,4,5],"duration":5,"label":"1 урок"}]}'
+```
+
+The whole payload is validated before anything is written. Invalid data returns
+400 and leaves the old schedule untouched. A flash write failure returns 500
+`storage_error`.
+
+If several entries match the same minute, the bell rings once with the longest
+duration. A bell fires only at second 0. The minute in which the device booted
+or the time was set is skipped, and missed bells are not replayed.
+
+### Settings
+
+```bash
+curl -s http://192.168.4.1/settings
+curl -s -X POST http://192.168.4.1/settings \
+  -H 'Content-Type: application/json' -d '{"ring_default":5}'
+```
+
+`ring_default` must be from 1 to 60.
+
+### HTML test page
+
+```bash
+curl -s http://192.168.4.1/
+```
+
+Open the same URL in a browser while connected to SchoolBell. The page shows
+status, has ring/stop/mode buttons and an X-Token input.
+
+### Error codes
+
+| Error | HTTP | Meaning |
+| --- | --- | --- |
+| `unauthorized` | 401 | `X-Token` missing or wrong |
+| `invalid_json` | 400 | Body is not valid JSON |
+| `invalid_sec` | 400 | Ring duration is not 1–60 |
+| `invalid_mode` | 400 | Mode is not `auto`/`manual` |
+| `invalid_datetime` | 400 | Bad date/time or year outside 2024–2099 |
+| `invalid_schedule` | 400 | Any invalid schedule field |
+| `too_many_entries` | 400 | More than 64 entries |
+| `invalid_ring_default` | 400 | Default duration is not 1–60 |
+| `not_found` | 404 | Unknown path |
+| `storage_error` | 500 | LittleFS mount/write failed |
+| `rtc_not_found` | 503 | DS3231 did not respond to `/time` |
+
+`/status` also reports active device errors: `rtc_not_found`, `time_not_set`,
+`storage_error`, `wifi_ap_error`. They disappear automatically when the cause
+goes away.
+
+## Status LED
+
+Priority from highest to lowest:
+
+1. Ringing — LED solid ON.
+2. Any active error — Morse SOS (`... --- ...`): dot 150 ms, dash 450 ms,
+   150 ms between signals, 450 ms between letters, 1.5 s pause.
+3. Normal — 1 Hz slow blink (500 ms on, 500 ms off).
+
+## Automated API test
+
+With the PC connected to the SchoolBell Wi-Fi network:
+
+```bash
+scripts/api-test.sh
+# or a custom address / token:
+X_TOKEN=secret scripts/api-test.sh http://192.168.4.1
+```
+
+The script exercises every endpoint, checks status codes, CORS, UTF-8 labels,
+default days, 400/503 error paths and 404 handling. It saves the current
+schedule, mode and `ring_default` and restores them on exit.
+
+## Testing checklist
+
+1. `scripts/build-firmware.sh` succeeds and prints flash/RAM usage.
+2. The serial monitor prints no crash/reboot loop after power-up.
+3. The SchoolBell SSID appears; a phone gets an address in `192.168.4.0/24`.
+4. `curl http://192.168.4.1/status` returns JSON with `"fw":"1.0.0"`.
+5. LED blinks 1 Hz; disconnecting the RTC shows SOS and `rtc_not_found`.
+6. Set the time from the app; `rtc_ok` becomes `true`, `time_not_set` clears.
+7. Ring for 3 s and press Stop: relay clicks on/off and the LED is solid while
+   ringing.
+8. Save a schedule entry one minute in the future; at second 0 the relay clicks
+   once. Check a same-minute pair rings for the longer duration.
+9. Switch to `manual`; the schedule no longer fires, manual ring still works.
+10. Power-cycle the device: schedule, mode and `ring_default` survive.
+11. Boot during a scheduled minute: no bell for that minute.
+12. Rotate the phone and toggle dark mode: screen state and unsaved schedule
+    stay intact.
+13. Disable Wi-Fi: the app shows an offline indicator and a Russian error.
+14. Send a malformed schedule via curl: HTTP 400 and the device keeps the old
+    schedule.
+
+## Implementation notes and assumptions
+
+- The DS3231 stores local time at the school; there is no timezone conversion
+  and no NTP.
+- The relay module is assumed to be active LOW, as specified. If a different
+  module is used, invert `relayOn()`/`relayOff()`.
+- The firmware uses a single `.ino` file and never blocks in `loop()`. RTC
+  detection, AP startup and LittleFS mounting are retried periodically.
+- The schedule is written with a temporary file and rename, so a power loss
+  during save does not leave a half-written schedule.
+- The app uses cleartext HTTP only for `192.168.4.1`
+  (`res/xml/network_security_config.xml`). If the base URL is changed to a
+  different cleartext host, add that host to the network security config.
+- The Android app binds HTTP calls to the Wi-Fi transport. This avoids mobile
+  data being used when the SchoolBell network has no internet access.
+- The app's default ring duration is stored locally and also sent to the device
+  as `ring_default`.
+- HTTP is unencrypted and the AP password is a compile-time constant. This is a
+  closed, local-only device; do not expose it to an untrusted network. Set
+  `API_TOKEN` for a small amount of protection.
