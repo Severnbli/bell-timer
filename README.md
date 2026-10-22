@@ -194,8 +194,14 @@ phone); add a release keystore if you need a Play-style signed build.
    Wi-Fi network with `Network.socketFactory`, so the device is still reachable.
 3. Open the app. On first connection, if the RTC is missing or the drift is more
    than 5 seconds, the app offers to set the device time from the phone.
-4. Review or edit the schedule. The first save replaces the whole schedule on
-   the device.
+4. Review or edit the schedule. It is organised into **groups**: a named set of
+   bells that repeats on the weekdays selected for the group (for example
+   "Будни", Monday–Friday). Per-date **exceptions** can mute a day or switch it
+   to another group, and the **auto mode period** limits the whole schedule to
+   a start/stop date range. The schedule screen can also import and export the
+   complete schedule as JSON, and the generator offers presets for school
+   (45/10 or 40/10), college (45/5) and university (90/10) timetables. The
+   first save replaces the whole schedule on the device.
 5. Choose **Авто** to follow the schedule, or **Ручной** to disable the schedule;
    manual ringing always works.
 
@@ -264,12 +270,16 @@ curl -s http://192.168.4.1/status
   "ring_left": 0,
   "ring_default": 5,
   "entries": 12,
+  "groups": 1,
+  "exceptions": 0,
   "errors": [],
-  "fw": "1.0.0"
+  "fw": "1.1.0"
 }
 ```
 
-`time` is `null` when the RTC is missing or the time is not valid.
+`time` is `null` when the RTC is missing or the time is not valid. `entries` is
+the total number of bells across all groups; `groups` and `exceptions` are the
+counts of the schedule groups and date exceptions.
 
 ### Ring and stop
 
@@ -318,34 +328,72 @@ respond.
 
 ### Schedule
 
+A schedule is a list of **groups**. Each group is a named set of bells that
+repeats on the weekdays selected for the group. Per-date **exceptions** can
+mute a day or point it at another group, and auto mode can be limited to a
+**start/stop date range**.
+
 ```bash
 curl -s http://192.168.4.1/schedule
 ```
 
 ```json
 {
-  "entries": [
+  "version": 2,
+  "max_entries": 256,
+  "max_groups": 12,
+  "max_exceptions": 64,
+  "auto": { "start": "2026-09-01", "stop": "2027-05-31" },
+  "groups": [
     {
-      "time": "08:30",
+      "id": 1,
+      "name": "Будни",
       "days": [1, 2, 3, 4, 5],
-      "duration": 5,
-      "label": "1 урок"
+      "entries": [
+        {
+          "time": "08:30",
+          "days": [1, 2, 3, 4, 5],
+          "duration": 5,
+          "label": "1 урок"
+        }
+      ]
     }
-  ]
+  ],
+  "exceptions": [
+    { "date": "2026-12-25", "mute": true },
+    { "date": "2026-12-26", "group_id": 2 }
+  ],
+  "entries": [ ... ]
 }
 ```
 
-Days are ISO weekdays: `1` = Monday, `7` = Sunday. When `days` is omitted in a
-request, all days are used. `duration` is 1–60 seconds and defaults to the
-device's `ring_default`. Labels are UTF-8 and truncated to approximately 15
-Cyrillic characters at a UTF-8 boundary. Up to 64 entries are accepted.
+Days are ISO weekdays: `1` = Monday, `7` = Sunday. When `days` is omitted, all
+days are used. `duration` is 1–60 seconds and defaults to the device's
+`ring_default`. Labels are UTF-8 and truncated to approximately 15 Cyrillic
+characters at a UTF-8 boundary.
+
+- `auto.start` / `auto.stop` are optional dates. Scheduled bells fire only
+  inside the range; an omitted date means "no limit". Manual ringing is not
+  affected.
+- `exceptions` apply to a single date. `mute` disables every bell that day;
+  `group_id` uses that group even if its weekdays do not match. A date may
+  appear only once.
+- In auto mode the first group (in document order) whose `days` contain today
+  is used. An entry with a narrower `days` list only rings on the intersection
+  of the entry and group days.
+- `entries` is a flat read-only view of all group bells. A legacy document with
+  only `{"entries":[...]}` is still accepted and becomes one every-day group.
+- Limits: 256 bells in total across groups, 12 groups, 64 exceptions. The app
+  shows these limits and refuses to save more.
 
 Replace the whole schedule:
 
 ```bash
 curl -s -X POST http://192.168.4.1/schedule \
   -H 'Content-Type: application/json' \
-  -d '{"entries":[{"time":"08:30","days":[1,2,3,4,5],"duration":5,"label":"1 урок"}]}'
+  -d '{"groups":[{"id":1,"name":"Будни","days":[1,2,3,4,5],
+       "entries":[{"time":"08:30","duration":5,"label":"1 урок"}]}],
+       "auto":{"start":"2026-09-01","stop":"2027-05-31"}}'
 ```
 
 The whole payload is validated before anything is written. Invalid data returns
@@ -384,8 +432,10 @@ status, has ring/stop/mode buttons and an X-Token input.
 | `invalid_sec` | 400 | Ring duration is not 1–60 |
 | `invalid_mode` | 400 | Mode is not `auto`/`manual` |
 | `invalid_datetime` | 400 | Bad date/time or year outside 2024–2099 |
-| `invalid_schedule` | 400 | Any invalid schedule field |
-| `too_many_entries` | 400 | More than 64 entries |
+| `invalid_schedule` | 400 | Any invalid schedule field, duplicate group id/date, unknown `group_id` in an exception, or `auto.stop` before `auto.start` |
+| `too_many_entries` | 400 | More than 256 bells in total |
+| `too_many_groups` | 400 | More than 12 groups |
+| `too_many_exceptions` | 400 | More than 64 date exceptions |
 | `invalid_ring_default` | 400 | Default duration is not 1–60 |
 | `not_found` | 404 | Unknown path |
 | `storage_error` | 500 | LittleFS mount/write failed |
@@ -436,7 +486,7 @@ schedule, mode and `ring_default` and restores them on exit.
 1. `scripts/build-firmware.sh` succeeds and prints flash/RAM usage.
 2. The serial monitor prints no crash/reboot loop after power-up.
 3. The BellTimer SSID appears; a phone gets an address in `192.168.4.0/24`.
-4. `curl http://192.168.4.1/status` returns JSON with `"fw":"1.0.0"`.
+4. `curl http://192.168.4.1/status` returns JSON with `"fw":"1.1.0"`.
 5. LED blinks green 1 Hz; disconnecting the RTC shows a fast red blink and
    `rtc_not_found`.
 6. Set the time from the app; `rtc_ok` becomes `true`, `time_not_set` clears.
