@@ -46,7 +46,7 @@ class ApiClient(context: Context) {
         .callTimeout(4, TimeUnit.SECONDS)
         .build()
 
-    private val networkClients = ConcurrentHashMap<Int, OkHttpClient>()
+    private val networkClients = ConcurrentHashMap<Network, OkHttpClient>()
     private val wifiNetworks: MutableSet<Network> =
         Collections.synchronizedSet(mutableSetOf<Network>())
 
@@ -165,7 +165,7 @@ class ApiClient(context: Context) {
     }
 
     private fun clientFor(network: Network): OkHttpClient =
-        networkClients.getOrPut(network.hashCode()) {
+        networkClients.getOrPut(network) {
             baseClient.newBuilder()
                 .socketFactory(network.socketFactory)
                 .build()
