@@ -2,6 +2,7 @@ package com.schoolbell.app.ui
 
 import android.content.Intent
 import android.provider.Settings
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,13 +16,11 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Wifi
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -34,14 +33,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.schoolbell.app.AppViewModel
 import com.schoolbell.app.BuildConfig
 import com.schoolbell.app.R
 import com.schoolbell.app.UiState
-import kotlin.math.roundToInt
+import com.schoolbell.app.data.normalizeBaseUrl
 
 @Composable
 fun SettingsScreen(state: UiState, viewModel: AppViewModel) {
@@ -60,6 +58,10 @@ fun SettingsScreen(state: UiState, viewModel: AppViewModel) {
         viewModel.refreshDeviceSettings()
     }
 
+    val dirty = normalizeBaseUrl(baseUrl) != state.settings.baseUrl ||
+        token.trim() != state.settings.token ||
+        ringDefault != state.settings.ringDefault
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -72,11 +74,23 @@ fun SettingsScreen(state: UiState, viewModel: AppViewModel) {
             style = MaterialTheme.typography.headlineSmall,
         )
 
+        AnimatedVisibility(visible = dirty) {
+            SyncBanner(
+                text = stringResource(R.string.settings_dirty_banner),
+                onSync = { viewModel.saveSettings(baseUrl, token, ringDefault) },
+                enabled = !state.busy,
+            )
+        }
+
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                Text(
+                    text = stringResource(R.string.settings_connection_title),
+                    style = MaterialTheme.typography.titleMedium,
+                )
                 OutlinedTextField(
                     value = baseUrl,
                     onValueChange = { baseUrl = it },
@@ -93,23 +107,28 @@ fun SettingsScreen(state: UiState, viewModel: AppViewModel) {
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
+            }
+        }
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = stringResource(R.string.settings_default_ring),
-                        style = MaterialTheme.typography.bodyLarge,
+                        text = stringResource(R.string.settings_ring_title),
+                        style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.weight(1f),
                     )
                     Text(
                         text = stringResource(R.string.duration_seconds, ringDefault),
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
                     )
                 }
-                Slider(
-                    value = ringDefault.toFloat(),
-                    onValueChange = { ringDefault = it.roundToInt().coerceIn(1, 60) },
-                    valueRange = 1f..60f,
-                    steps = 58,
+                RingDurationPicker(
+                    seconds = ringDefault,
+                    onSecondsChange = { ringDefault = it },
                 )
                 state.deviceRingDefault?.let {
                     Text(
@@ -118,31 +137,6 @@ fun SettingsScreen(state: UiState, viewModel: AppViewModel) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                Button(
-                    onClick = { viewModel.saveSettings(baseUrl, token, ringDefault) },
-                    enabled = !state.busy,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(stringResource(R.string.settings_save))
-                }
-            }
-        }
-
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Text(
-                    text = stringResource(R.string.settings_app_version, BuildConfig.VERSION_NAME),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                val firmware = state.status?.fw?.takeIf { it.isNotBlank() }
-                    ?: stringResource(R.string.settings_fw_unknown)
-                Text(
-                    text = stringResource(R.string.settings_fw_version, firmware),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
             }
         }
 
@@ -152,16 +146,12 @@ fun SettingsScreen(state: UiState, viewModel: AppViewModel) {
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
-                    text = stringResource(R.string.wifi_ssid_note),
-                    style = MaterialTheme.typography.titleSmall,
-                )
-                Text(
                     text = stringResource(R.string.settings_connection_note),
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Text(
                     text = stringResource(R.string.settings_android_note),
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 OutlinedButton(
@@ -176,6 +166,26 @@ fun SettingsScreen(state: UiState, viewModel: AppViewModel) {
                     Spacer(Modifier.width(8.dp))
                     Text(stringResource(R.string.open_wifi_settings))
                 }
+            }
+        }
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.settings_app_version, BuildConfig.VERSION_NAME),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                val firmware = state.status?.fw?.takeIf { it.isNotBlank() }
+                    ?: stringResource(R.string.settings_fw_unknown)
+                Text(
+                    text = stringResource(R.string.settings_fw_version, firmware),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }

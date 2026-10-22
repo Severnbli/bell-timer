@@ -15,7 +15,8 @@
     <string name="mode_auto">Авто</string>
     <string name="mode_manual">Ручной</string>
     <string name="mode_toggle">Автоматическое расписание</string>
-    <string name="ring_duration">Длительность звонка, с</string>
+    <string name="ring_duration">Длительность звонка</string>
+    <string name="control_duration_changed">Длительность отличается от настройки устройства</string>
     <string name="ring_button">Звонок</string>
     <string name="stop_button">Стоп</string>
     <string name="ringing_left">Идёт звонок, осталось %1$d с</string>
@@ -27,9 +28,14 @@
     <string name="sync_time_confirm">Синхронизировать</string>
     <string name="sync_time_later">Позже</string>
     <string name="wifi_title">Подключение к устройству</string>
-    <string name="wifi_hint">Подключите телефон к Wi-Fi сети «SchoolBell» (пароль bell12345). Даже если Android предпочитает мобильный интернет, приложение направляет запросы в эту Wi-Fi сеть.</string>
-    <string name="wifi_ssid_note">Сеть: SchoolBell · пароль: bell12345</string>
+    <string name="wifi_hint">Подключите телефон к Wi-Fi сети устройства. Если сети нет в списке, откройте настройки Wi-Fi и выберите её вручную.</string>
     <string name="open_wifi_settings">Открыть настройки Wi-Fi</string>
+    <string name="sync_button">Синхронизировать</string>
+    <string name="duration_other">Другое</string>
+    <string name="duration_custom_label">Своё значение, с</string>
+    <string name="duration_range_hint">от %1$d до %2$d с</string>
+    <string name="days_weekdays">Будни</string>
+    <string name="days_every_day">Каждый день</string>
     <string name="refresh_desc">Обновить</string>
     <string name="retry">Повторить</string>
     <string name="cancel">Отмена</string>
@@ -71,13 +77,15 @@
     <string name="mode_manual_set">Включён ручной режим</string>
 
     <string name="schedule_title">Расписание звонков</string>
-    <string name="schedule_empty">Расписание пусто. Добавьте первый звонок.</string>
-    <string name="schedule_add">Добавить</string>
-    <string name="schedule_save">Сохранить на устройство</string>
-    <string name="schedule_load">Загрузить с устройства</string>
+    <string name="schedule_empty">Расписание пока пусто</string>
+    <string name="schedule_empty_hint">Нажмите «Добавить звонок» или сгенерируйте расписание уроков.</string>
+    <string name="schedule_count">%1$d из %2$d записей</string>
+    <string name="schedule_add">Добавить звонок</string>
+    <string name="schedule_load">Загрузить</string>
     <string name="schedule_saved">Расписание сохранено</string>
     <string name="schedule_loaded">Расписание загружено</string>
     <string name="schedule_dirty_short">Не сохранено</string>
+    <string name="schedule_dirty_banner">Расписание изменено</string>
     <string name="schedule_unsaved_confirm_title">Отменить изменения?</string>
     <string name="schedule_unsaved_confirm_text">В расписании есть несохранённые изменения. Загрузить расписание с устройства и потерять их?</string>
     <string name="schedule_unsaved_confirm_yes">Загрузить</string>
@@ -93,10 +101,12 @@
     <string name="schedule_entry_invalid_duration">Длительность должна быть от 1 до 60 с</string>
     <string name="schedule_no_label">Без названия</string>
     <string name="schedule_delete_title">Удалить запись?</string>
-    <string name="schedule_delete_text">%1$s — удалить этот звонок?</string>
+    <string name="schedule_delete_text">%1$s – удалить этот звонок?</string>
 
     <string name="generator_button">Генератор</string>
     <string name="generator_title">Генератор расписания</string>
+    <string name="generator_hint">Звонки добавятся к текущему расписанию.</string>
+    <string name="generator_preview">Будет создано звонков: %1$d</string>
     <string name="generator_first_lesson">Начало первого урока</string>
     <string name="generator_lesson_length">Длительность урока, мин</string>
     <string name="generator_break_length">Перемена, мин</string>
@@ -117,11 +127,12 @@
     <string name="days_sun">Вс</string>
 
     <string name="settings_title">Настройки</string>
+    <string name="settings_connection_title">Подключение</string>
+    <string name="settings_ring_title">Звонок по умолчанию</string>
+    <string name="settings_dirty_banner">Есть несохранённые изменения</string>
     <string name="settings_base_url">Адрес устройства</string>
     <string name="settings_base_url_hint">http://192.168.4.1</string>
     <string name="settings_token">Токен доступа (необязательно)</string>
-    <string name="settings_default_ring">Длительность звонка по умолчанию, с</string>
-    <string name="settings_save">Сохранить настройки</string>
     <string name="settings_saved">Настройки сохранены</string>
     <string name="settings_saved_local">Настройки сохранены. Не удалось отправить их на устройство.</string>
     <string name="settings_invalid_url">Некорректный адрес устройства.</string>
@@ -129,7 +140,7 @@
     <string name="settings_app_version">Версия приложения: %1$s</string>
     <string name="settings_fw_version">Версия прошивки: %1$s</string>
     <string name="settings_fw_unknown">неизвестно</string>
-    <string name="settings_connection_note">Для работы подключите телефон к Wi-Fi сети SchoolBell.</string>
-    <string name="settings_android_note">Wi-Fi сеть устройства не имеет доступа в интернет — это нормально. Android может пытаться использовать мобильный интернет, но приложение привязывает HTTP-запросы к Wi-Fi сети.</string>
+    <string name="settings_connection_note">Для работы подключите телефон к Wi-Fi сети устройства.</string>
+    <string name="settings_android_note">Wi-Fi сеть устройства не имеет доступа в интернет – это нормально. Android может пытаться использовать мобильный интернет, но приложение привязывает HTTP-запросы к Wi-Fi сети.</string>
     <string name="settings_device_default">Сейчас на устройстве: %1$d с</string>
 </resources>

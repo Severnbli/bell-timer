@@ -2,12 +2,20 @@ package com.schoolbell.app.data
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.time.LocalDateTime
 import java.time.format.DateTimeParseException
 
 const val DEFAULT_BASE_URL = "http://192.168.4.1"
 const val DEFAULT_RING_SECONDS = 5
 const val MAX_SCHEDULE_ENTRIES = 64
+
+/** Firmware accepts 1..60 seconds for a single bell. */
+const val MIN_RING_SECONDS = 1
+const val MAX_RING_SECONDS = 60
+
+/** Values offered as quick chips before the user has to type a custom one. */
+const val QUICK_RING_SECONDS_MAX = 10
 
 data class AppSettings(
     val baseUrl: String = DEFAULT_BASE_URL,
@@ -56,6 +64,21 @@ data class BellEntry(
 
 fun List<BellEntry>.sortedSchedule(): List<BellEntry> =
     sortedWith(compareBy<BellEntry>({ it.minutes }, { it.label }))
+
+/**
+ * Normalizes user input into a canonical base URL, or returns null when the
+ * value cannot be used as a device address.
+ */
+fun normalizeBaseUrl(raw: String): String? {
+    var value = raw.trim()
+    if (value.isEmpty()) return null
+    if (!value.startsWith("http://") && !value.startsWith("https://")) {
+        value = "http://$value"
+    }
+    val url = value.toHttpUrlOrNull() ?: return null
+    if (url.encodedPath != "/" || url.query != null || url.fragment != null) return null
+    return url.newBuilder().build().toString().trimEnd('/')
+}
 
 @Serializable
 data class StatusDto(
@@ -133,7 +156,7 @@ fun ScheduleDto.toDomain(): List<BellEntry> = entries.mapNotNull { dto ->
     BellEntry(
         time = "%02d:%02d".format(hour, minute),
         days = days,
-        duration = dto.duration.coerceIn(1, 60),
+        duration = dto.duration.coerceIn(MIN_RING_SECONDS, MAX_RING_SECONDS),
         label = dto.label,
     )
 }.sortedSchedule()

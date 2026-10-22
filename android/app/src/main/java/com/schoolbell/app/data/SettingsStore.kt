@@ -13,7 +13,7 @@ class SettingsStore(context: Context) {
             baseUrl = rawUrl.ifBlank { DEFAULT_BASE_URL },
             token = prefs.getString(KEY_TOKEN, "").orEmpty(),
             ringDefault = prefs.getInt(KEY_RING_DEFAULT, DEFAULT_RING_SECONDS)
-                .coerceIn(1, 60),
+                .coerceIn(MIN_RING_SECONDS, MAX_RING_SECONDS),
         )
     }
 

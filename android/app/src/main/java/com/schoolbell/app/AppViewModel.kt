@@ -9,7 +9,10 @@ import com.schoolbell.app.data.AppSettings
 import com.schoolbell.app.data.BellEntry
 import com.schoolbell.app.data.DEFAULT_RING_SECONDS
 import com.schoolbell.app.data.DeviceStatus
+import com.schoolbell.app.data.MAX_RING_SECONDS
+import com.schoolbell.app.data.MIN_RING_SECONDS
 import com.schoolbell.app.data.SettingsStore
+import com.schoolbell.app.data.normalizeBaseUrl
 import com.schoolbell.app.data.sortedSchedule
 import com.schoolbell.app.data.toDomain
 import kotlinx.coroutines.CancellationException
@@ -21,7 +24,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
@@ -159,7 +161,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun ring(seconds: Int) {
         if (_state.value.busy) return
-        val safeSeconds = seconds.coerceIn(1, 60)
+        val safeSeconds = seconds.coerceIn(MIN_RING_SECONDS, MAX_RING_SECONDS)
         viewModelScope.launch {
             _state.update { it.copy(busy = true) }
             try {
@@ -329,7 +331,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             }
             return
         }
-        if (ringDefault !in 1..60) {
+        if (ringDefault !in MIN_RING_SECONDS..MAX_RING_SECONDS) {
             _state.update {
                 it.copy(message = getApplication<Application>().getString(R.string.settings_invalid_duration))
             }
@@ -405,7 +407,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setRingSeconds(seconds: Int) {
-        _state.update { it.copy(ringSeconds = seconds.coerceIn(1, 60)) }
+        _state.update { it.copy(ringSeconds = seconds.coerceIn(MIN_RING_SECONDS, MAX_RING_SECONDS)) }
     }
 
     fun clearMessage() {
@@ -469,17 +471,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 e.message ?: e.javaClass.simpleName,
             )
         }
-    }
-
-    private fun normalizeBaseUrl(raw: String): String? {
-        var value = raw.trim()
-        if (value.isEmpty()) return null
-        if (!value.startsWith("http://") && !value.startsWith("https://")) {
-            value = "http://$value"
-        }
-        val url = value.toHttpUrlOrNull() ?: return null
-        if (url.encodedPath != "/" || url.query != null || url.fragment != null) return null
-        return url.newBuilder().build().toString().trimEnd('/')
     }
 
     private companion object {

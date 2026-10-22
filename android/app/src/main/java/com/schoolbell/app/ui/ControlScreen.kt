@@ -2,6 +2,7 @@ package com.schoolbell.app.ui
 
 import android.content.Intent
 import android.provider.Settings
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,7 +34,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -49,7 +49,6 @@ import com.schoolbell.app.AppViewModel
 import com.schoolbell.app.ConnectionState
 import com.schoolbell.app.R
 import com.schoolbell.app.UiState
-import kotlin.math.roundToInt
 
 @Composable
 fun ControlScreen(state: UiState, viewModel: AppViewModel) {
@@ -64,6 +63,23 @@ fun ControlScreen(state: UiState, viewModel: AppViewModel) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        val deviceDefault = state.deviceRingDefault
+        AnimatedVisibility(
+            visible = online && deviceDefault != null && state.ringSeconds != deviceDefault,
+        ) {
+            SyncBanner(
+                text = stringResource(R.string.control_duration_changed),
+                onSync = {
+                    viewModel.saveSettings(
+                        state.settings.baseUrl,
+                        state.settings.token,
+                        state.ringSeconds,
+                    )
+                },
+                enabled = !state.busy,
+            )
+        }
+
         ConnectionCard(state = state, onRefresh = viewModel::refreshNow)
 
         Card(modifier = Modifier.fillMaxWidth()) {
@@ -148,11 +164,9 @@ fun ControlScreen(state: UiState, viewModel: AppViewModel) {
                         fontWeight = FontWeight.Bold,
                     )
                 }
-                Slider(
-                    value = state.ringSeconds.toFloat(),
-                    onValueChange = { viewModel.setRingSeconds(it.roundToInt()) },
-                    valueRange = 1f..60f,
-                    steps = 58,
+                RingDurationPicker(
+                    seconds = state.ringSeconds,
+                    onSecondsChange = viewModel::setRingSeconds,
                 )
                 if (status?.ringing == true) {
                     Text(
@@ -247,42 +261,39 @@ fun ControlScreen(state: UiState, viewModel: AppViewModel) {
             Text(stringResource(R.string.set_time_button))
         }
 
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant,
-            ),
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+        if (!online) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                ),
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Wifi, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = stringResource(R.string.wifi_title),
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                }
-                Text(
-                    text = stringResource(R.string.wifi_hint),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Text(
-                    text = stringResource(R.string.wifi_ssid_note),
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                OutlinedButton(
-                    onClick = {
-                        runCatching {
-                            context.startActivity(Intent(Settings.ACTION_WIFI_SETTINGS))
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text(stringResource(R.string.open_wifi_settings))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Wifi, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = stringResource(R.string.wifi_title),
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                    }
+                    Text(
+                        text = stringResource(R.string.wifi_hint),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            runCatching {
+                                context.startActivity(Intent(Settings.ACTION_WIFI_SETTINGS))
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(stringResource(R.string.open_wifi_settings))
+                    }
                 }
             }
         }
