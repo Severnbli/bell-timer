@@ -9,6 +9,10 @@ android/.idea/
 
 # Arduino
 firmware/**/build/
+firmware/SchoolBell/app_config.h
+
+# Local firmware configuration (credentials, API token)
+.env
 
 # OS / editors
 .DS_Store

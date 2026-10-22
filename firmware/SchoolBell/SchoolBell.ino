@@ -17,27 +17,36 @@
 #include <RTClib.h>
 #include <ArduinoJson.h>
 
+// Deployment settings (Wi-Fi credentials, API token, GPIO wiring) come from
+// .env. scripts/build-firmware.sh renders them into this header; it is
+// generated, git-ignored and must exist before the sketch can be compiled.
+#if __has_include("app_config.h")
+#include "app_config.h"
+#else
+#error "app_config.h is missing: copy .env.example to .env and run scripts/build-firmware.sh."
+#endif
+
 namespace {
 
 const char *const FW_VERSION = "1.0.0";
 
 // ----------------------------- Configuration ------------------------------
 
-const char *const AP_SSID = "SchoolBell";
-const char *const AP_PASSWORD = "bell12345";
-const char *const API_TOKEN = "";  // Leave empty to disable the X-Token check.
-const uint8_t AP_CHANNEL = 6;
-const uint8_t AP_MAX_CLIENTS = 4;
+const char *const AP_SSID = SCHOOLBELL_AP_SSID;
+const char *const AP_PASSWORD = SCHOOLBELL_AP_PASSWORD;
+const char *const API_TOKEN = SCHOOLBELL_API_TOKEN;  // Empty disables X-Token.
+const uint8_t AP_CHANNEL = SCHOOLBELL_AP_CHANNEL;
+const uint8_t AP_MAX_CLIENTS = SCHOOLBELL_AP_MAX_CLIENTS;
 
-const uint8_t PIN_RELAY = 26;
-const uint8_t PIN_LED_GREEN = 27;  // KY-029 "G" pin
-const uint8_t PIN_LED_RED = 25;    // KY-029 "R" pin
+const uint8_t PIN_RELAY = SCHOOLBELL_PIN_RELAY;
+const uint8_t PIN_LED_GREEN = SCHOOLBELL_PIN_LED_GREEN;  // KY-029 "G" pin
+const uint8_t PIN_LED_RED = SCHOOLBELL_PIN_LED_RED;      // KY-029 "R" pin
 // The KY-029 exists in a common-cathode and a common-anode variant. With the
-// common pin tied to GND the dies are lit by a HIGH level (false); with the
-// common pin tied to 3V3 they are lit by a LOW level (true).
-const bool LED_ACTIVE_LOW = false;
-const uint8_t PIN_I2C_SDA = 21;
-const uint8_t PIN_I2C_SCL = 22;
+// common pin tied to GND the dies are lit by a HIGH level; with the common pin
+// tied to 3V3 they are lit by a LOW level. See LED_ACTIVE_LOW in .env.
+const bool LED_ACTIVE_LOW = SCHOOLBELL_LED_ACTIVE_LOW;
+const uint8_t PIN_I2C_SDA = SCHOOLBELL_PIN_I2C_SDA;
+const uint8_t PIN_I2C_SCL = SCHOOLBELL_PIN_I2C_SCL;
 
 const size_t MAX_ENTRIES = 64;
 const size_t MAX_LABEL_BYTES = 45;  // About 15 Cyrillic characters in UTF-8.

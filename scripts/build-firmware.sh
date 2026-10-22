@@ -7,6 +7,14 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SKETCH_DIR="${REPO_ROOT}/firmware/SchoolBell"
 FQBN="${FQBN:-esp32:esp32:esp32}"
 
+# Loads .env and renders firmware/SchoolBell/app_config.h.
+CONFIG_SCRIPT="${SCRIPT_DIR}/gen-config.sh"
+
+if [[ ! -x "${CONFIG_SCRIPT}" ]]; then
+    echo "ERROR: ${CONFIG_SCRIPT} is missing or not executable." >&2
+    exit 1
+fi
+
 if ! command -v arduino-cli >/dev/null 2>&1; then
     echo "ERROR: arduino-cli is not installed or not on PATH." >&2
     echo "Install it from https://arduino.github.io/arduino-cli/ and rerun this script." >&2
@@ -30,6 +38,9 @@ if ! arduino-cli lib list | awk '{print $1}' | grep -qx "ArduinoJson"; then
     echo "Run: arduino-cli lib install ArduinoJson" >&2
     exit 1
 fi
+
+# Load .env and write firmware/SchoolBell/app_config.h before compiling.
+"${CONFIG_SCRIPT}"
 
 echo "Compiling ${SKETCH_DIR} for ${FQBN}..."
 arduino-cli compile --fqbn "${FQBN}" "${SKETCH_DIR}" "$@"
