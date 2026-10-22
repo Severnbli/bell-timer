@@ -307,12 +307,15 @@ pin. It is wired to two GPIOs, so the colours below are produced natively.
 | Colour | Meaning |
 | --- | --- |
 | Green, 1 Hz blink (500 ms on/off) | Normal, no errors |
-| Red, Morse SOS (`... --- ...`) | An error is active: `rtc_not_found`, `time_not_set`, `storage_error`, `wifi_ap_error` |
-| Amber (green + red together) | The bell is ringing |
+| Steady green | The bell is ringing (nothing blinks while it sounds) |
+| Red, 2 Hz blink (250 ms on/off) | Critical error: `rtc_not_found`, `storage_error` or `wifi_ap_error` |
+| Steady red | Warning: `time_not_set` - manual ring works, but the schedule cannot fire |
 
-Priority from highest to lowest: ringing, error, normal. The SOS timing is a
-150 ms dot, 450 ms dash, 150 ms between signals, 450 ms between letters and a
-1.5 s pause before repeating.
+Priority from highest to lowest: ringing, critical error, warning, normal.
+
+Using red both ways keeps the severity readable at a glance without Morse code:
+a slow red blink means *broken*, a steady red means *not ready yet*, and the
+steady red turns itself off as soon as the time is set.
 
 If your KY-029 is the **common-anode** variant (common pin to 3V3 instead of
 GND), set `LED_ACTIVE_LOW = true` in `firmware/SchoolBell/SchoolBell.ino` and
@@ -338,11 +341,11 @@ schedule, mode and `ring_default` and restores them on exit.
 2. The serial monitor prints no crash/reboot loop after power-up.
 3. The SchoolBell SSID appears; a phone gets an address in `192.168.4.0/24`.
 4. `curl http://192.168.4.1/status` returns JSON with `"fw":"1.0.0"`.
-5. LED blinks green 1 Hz; disconnecting the RTC shows a red SOS and
+5. LED blinks green 1 Hz; disconnecting the RTC shows a fast red blink and
    `rtc_not_found`.
 6. Set the time from the app; `rtc_ok` becomes `true`, `time_not_set` clears.
-7. Ring for 3 s and press Stop: relay clicks on/off and the LED is amber (green
-   plus red) while ringing.
+7. Ring for 3 s and press Stop: relay clicks on/off and the LED is steady green
+   while ringing.
 8. Save a schedule entry one minute in the future; at second 0 the relay clicks
    once. Check a same-minute pair rings for the longer duration.
 9. Switch to `manual`; the schedule no longer fires, manual ring still works.
