@@ -4,6 +4,13 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+// Version can be overridden from the command line or CI, e.g.
+//   ./gradlew assembleDebug -PappVersionName=1.2.0 -PappVersionCode=10200
+val appVersionName: String =
+    (findProperty("appVersionName") as String?)?.trim()?.takeIf { it.isNotEmpty() } ?: "1.0.0"
+val appVersionCode: Int =
+    (findProperty("appVersionCode") as String?)?.trim()?.toIntOrNull() ?: 1
+
 android {
     namespace = "com.schoolbell.app"
     compileSdk {
@@ -18,8 +25,8 @@ android {
         targetSdk {
             version = release(37)
         }
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = appVersionCode
+        versionName = appVersionName
     }
 
     buildTypes {
