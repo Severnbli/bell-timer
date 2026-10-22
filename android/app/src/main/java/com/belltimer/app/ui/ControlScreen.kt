@@ -115,6 +115,31 @@ fun ControlScreen(state: UiState, viewModel: AppViewModel) {
                     text = stringResource(R.string.status_entries, status?.entries ?: 0),
                     style = MaterialTheme.typography.bodyMedium,
                 )
+                val autoWindow = state.schedule.auto
+                if (autoWindow.isSet) {
+                    val start = autoWindow.start
+                    val stop = autoWindow.stop
+                    val period = when {
+                        start != null && stop != null -> stringResource(
+                            R.string.control_auto_period_both,
+                            start.displayDate(),
+                            stop.displayDate(),
+                        )
+                        start != null -> stringResource(
+                            R.string.control_auto_period_from,
+                            start.displayDate(),
+                        )
+                        else -> stringResource(
+                            R.string.control_auto_period_until,
+                            stop?.displayDate().orEmpty(),
+                        )
+                    }
+                    Text(
+                        text = period,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
 

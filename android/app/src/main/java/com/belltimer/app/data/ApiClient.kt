@@ -36,7 +36,7 @@ class ApiClient(context: Context) {
     private val json = Json {
         ignoreUnknownKeys = true
         explicitNulls = false
-        encodeDefaults = false
+        encodeDefaults = true
     }
 
     private val baseClient: OkHttpClient = OkHttpClient.Builder()
@@ -93,8 +93,8 @@ class ApiClient(context: Context) {
 
     suspend fun getSchedule(): ScheduleDto = decode(read("GET", "/schedule"))
 
-    suspend fun saveSchedule(entries: List<ScheduleEntryDto>): ApiResponse = decode(
-        read("POST", "/schedule", json.encodeToString(ScheduleDto(entries))),
+    suspend fun saveSchedule(schedule: ScheduleDto): ApiResponse = decode(
+        read("POST", "/schedule", json.encodeToString(schedule)),
     )
 
     suspend fun getSettings(): SettingsDto = decode(read("GET", "/settings"))

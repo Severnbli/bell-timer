@@ -44,6 +44,9 @@
     <string name="edit_desc">Изменить</string>
     <string name="delete_desc">Удалить</string>
     <string name="status_entries">Записей в расписании: %1$d</string>
+    <string name="control_auto_period_both">Авто-режим: %1$s — %2$s</string>
+    <string name="control_auto_period_from">Авто-режим с %1$s</string>
+    <string name="control_auto_period_until">Авто-режим до %1$s</string>
     <string name="device_offline_hint">Устройство не отвечает. Проверьте, что телефон подключён к Wi-Fi BellTimer.</string>
 
     <string name="error_rtc_not_found">Часы DS3231 не найдены</string>
@@ -63,7 +66,7 @@
     <string name="error_invalid_schedule">Расписание отклонено устройством.</string>
     <string name="error_invalid_request">Некорректный запрос.</string>
     <string name="error_invalid_ring_default">Недопустимая длительность звонка по умолчанию.</string>
-    <string name="error_too_many_entries">Слишком много записей (максимум 64).</string>
+    <string name="error_too_many_entries">Слишком много записей (максимум 256).</string>
     <string name="error_storage_device">Не удалось сохранить данные на устройстве.</string>
     <string name="error_rtc_device">Часы DS3231 не найдены.</string>
     <string name="error_not_found">Запрос не найден на устройстве.</string>
@@ -77,10 +80,7 @@
     <string name="mode_manual_set">Включён ручной режим</string>
 
     <string name="schedule_title">Расписание звонков</string>
-    <string name="schedule_empty">Расписание пока пусто</string>
-    <string name="schedule_empty_hint">Нажмите «Добавить звонок» или сгенерируйте расписание уроков.</string>
-    <string name="schedule_count">%1$d из %2$d записей</string>
-    <string name="schedule_add">Добавить звонок</string>
+    <string name="schedule_count">%1$d из %2$d звонков</string>
     <string name="schedule_load">Загрузить</string>
     <string name="schedule_saved">Расписание сохранено</string>
     <string name="schedule_loaded">Расписание загружено</string>
@@ -105,13 +105,13 @@
 
     <string name="generator_button">Генератор</string>
     <string name="generator_title">Генератор расписания</string>
-    <string name="generator_hint">Звонки добавятся к текущему расписанию.</string>
+    <string name="generator_hint">Будет создана новая группа звонков.</string>
     <string name="generator_preview">Будет создано звонков: %1$d</string>
     <string name="generator_first_lesson">Начало первого урока</string>
     <string name="generator_lesson_length">Длительность урока, мин</string>
     <string name="generator_break_length">Перемена, мин</string>
     <string name="generator_count">Количество уроков</string>
-    <string name="generator_apply">Создать</string>
+    <string name="generator_apply">Создать группу</string>
     <string name="generator_invalid">Проверьте значения: длительности и количество должны быть больше нуля.</string>
     <string name="generator_too_long">Расписание выходит за пределы суток.</string>
     <string name="generator_too_many">Получится больше 64 звонков.</string>
@@ -143,4 +143,76 @@
     <string name="settings_connection_note">Для работы подключите телефон к Wi-Fi сети устройства.</string>
     <string name="settings_android_note">Wi-Fi сеть устройства не имеет доступа в интернет – это нормально. Android может пытаться использовать мобильный интернет, но приложение привязывает HTTP-запросы к Wi-Fi сети.</string>
     <string name="settings_device_default">Сейчас на устройстве: %1$d с</string>
+
+    <string name="ok">ОК</string>
+
+    <string name="schedule_groups_title">Группы звонков</string>
+    <string name="schedule_groups_hint">Группа повторяется в выбранные дни недели. В авто-режиме используется первая подходящая группа.</string>
+    <string name="schedule_no_groups">Групп пока нет</string>
+    <string name="schedule_no_groups_hint">Создайте группу вручную или сгенерируйте её по шаблону.</string>
+    <string name="schedule_group_add">Группа</string>
+    <string name="schedule_group_untitled">Без названия</string>
+    <string name="schedule_group_title_new">Новая группа</string>
+    <string name="schedule_group_title_edit">Изменить группу</string>
+    <string name="schedule_group_name">Название группы</string>
+    <string name="schedule_group_name_hint">Например: Будни</string>
+    <string name="schedule_group_days">Дни недели</string>
+    <string name="schedule_group_entries">%1$d звонков</string>
+    <string name="schedule_group_empty">В группе нет звонков</string>
+    <string name="schedule_group_add_bell">Добавить звонок</string>
+    <string name="schedule_group_delete_title">Удалить группу?</string>
+    <string name="schedule_group_delete_text">«%1$s» и все её звонки будут удалены.</string>
+    <string name="schedule_group_name_required">Введите название группы</string>
+    <string name="schedule_group_invalid_days">Выберите хотя бы один день</string>
+
+    <string name="schedule_exceptions_title">Исключения по датам</string>
+    <string name="schedule_exceptions_hint">Для отдельной даты можно отключить звонки или использовать другую группу.</string>
+    <string name="schedule_exceptions_empty">Исключений нет.</string>
+    <string name="schedule_exception_add">Добавить исключение</string>
+    <string name="schedule_exception_title">Исключение на дату</string>
+    <string name="schedule_exception_date">Дата</string>
+    <string name="schedule_exception_mute">Отключить звонки в этот день</string>
+    <string name="schedule_exception_group">Группа звонков</string>
+    <string name="schedule_exception_muted">Звонков нет</string>
+    <string name="schedule_exception_uses_group">Группа «%1$s»</string>
+    <string name="schedule_exception_invalid">Группа не выбрана</string>
+    <string name="schedule_exception_duplicate">На эту дату уже есть исключение</string>
+    <string name="schedule_exception_no_group">Выберите группу или отключите звонки</string>
+    <string name="schedule_exception_delete_title">Удалить исключение?</string>
+    <string name="schedule_exception_delete_text">Исключение на %1$s будет удалено.</string>
+
+    <string name="schedule_auto_title">Период авто-режима</string>
+    <string name="schedule_auto_hint">Звонки по расписанию работают только в этом периоде. Незаполненная дата означает отсутствие ограничения.</string>
+    <string name="schedule_auto_start">Начало</string>
+    <string name="schedule_auto_stop">Окончание</string>
+    <string name="schedule_auto_not_set">Не задано</string>
+    <string name="schedule_auto_clear">Сбросить</string>
+    <string name="schedule_auto_invalid">Дата окончания раньше даты начала</string>
+
+    <string name="schedule_import">Импорт</string>
+    <string name="schedule_export">Экспорт</string>
+    <string name="schedule_import_success">Импортировано звонков: %1$d</string>
+    <string name="schedule_import_error">Не удалось прочитать файл расписания</string>
+    <string name="schedule_export_success">Расписание экспортировано</string>
+    <string name="schedule_export_error">Не удалось сохранить файл</string>
+    <string name="schedule_export_empty">Расписание пусто – нечего экспортировать</string>
+    <string name="schedule_too_large">В расписании слишком много данных для устройства</string>
+    <string name="schedule_too_many_groups">Достигнут лимит групп (12)</string>
+
+    <string name="generator_template">Шаблон</string>
+    <string name="generator_template_custom">Своё</string>
+    <string name="generator_template_school">Школа 45/10</string>
+    <string name="generator_template_school_short">Школа 40/10</string>
+    <string name="generator_template_college">Колледж 45/5</string>
+    <string name="generator_template_university">Вуз 90/10</string>
+    <string name="generator_group_default">Новая группа</string>
+    <string name="generator_group_school">Уроки</string>
+    <string name="generator_group_college">Пары</string>
+    <string name="generator_group_university">Пары</string>
+    <string name="generator_group_name">Название группы</string>
+    <string name="generator_days">Дни недели</string>
+    <string name="generator_too_many_groups">Достигнут лимит групп (12)</string>
+
+    <string name="error_too_many_groups">Слишком много групп расписания (максимум 12).</string>
+    <string name="error_too_many_exceptions">Слишком много исключений (максимум 64).</string>
 </resources>

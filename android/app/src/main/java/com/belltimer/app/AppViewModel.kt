@@ -6,15 +6,19 @@ import androidx.lifecycle.viewModelScope
 import com.belltimer.app.data.ApiClient
 import com.belltimer.app.data.ApiException
 import com.belltimer.app.data.AppSettings
-import com.belltimer.app.data.BellEntry
+import com.belltimer.app.data.BellSchedule
 import com.belltimer.app.data.DEFAULT_RING_SECONDS
 import com.belltimer.app.data.DeviceStatus
+import com.belltimer.app.data.MAX_DATE_EXCEPTIONS
 import com.belltimer.app.data.MAX_RING_SECONDS
+import com.belltimer.app.data.MAX_SCHEDULE_ENTRIES
+import com.belltimer.app.data.MAX_SCHEDULE_GROUPS
 import com.belltimer.app.data.MIN_RING_SECONDS
+import com.belltimer.app.data.ScheduleCodec
 import com.belltimer.app.data.SettingsStore
 import com.belltimer.app.data.normalizeBaseUrl
-import com.belltimer.app.data.sortedSchedule
 import com.belltimer.app.data.toDomain
+import com.belltimer.app.data.toDto
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -36,7 +40,7 @@ data class UiState(
     val connection: ConnectionState = ConnectionState.Offline,
     val status: DeviceStatus? = null,
     val lastError: String? = null,
-    val schedule: List<BellEntry> = emptyList(),
+    val schedule: BellSchedule = BellSchedule(),
     val scheduleDirty: Boolean = false,
     val scheduleLoaded: Boolean = false,
     val scheduleLoadAttempted: Boolean = false,
@@ -256,11 +260,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (_state.value.loadingSchedule) return
         _state.update { it.copy(loadingSchedule = true) }
         try {
-            val entries = api.getSchedule().toDomain()
+            val schedule = api.getSchedule().toDomain()
             _state.update {
                 it.copy(
                     loadingSchedule = false,
-                    schedule = entries,
+                    schedule = schedule,
                     scheduleDirty = false,
                     scheduleLoaded = true,
                     scheduleLoadAttempted = true,
@@ -285,10 +289,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun updateSchedule(entries: List<BellEntry>) {
+    fun updateSchedule(schedule: BellSchedule) {
         _state.update {
             it.copy(
-                schedule = entries.sortedSchedule(),
+                schedule = schedule,
                 scheduleDirty = true,
                 scheduleLoaded = true,
             )
@@ -297,11 +301,27 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun saveSchedule() {
         if (_state.value.busy) return
+        val schedule = _state.value.schedule
+        if (!schedule.auto.isValid) {
+            _state.update {
+                it.copy(
+                    message = getApplication<Application>().getString(R.string.schedule_auto_invalid),
+                )
+            }
+            return
+        }
+        if (!withinDeviceLimits(schedule)) {
+            _state.update {
+                it.copy(
+                    message = getApplication<Application>().getString(R.string.schedule_too_large),
+                )
+            }
+            return
+        }
         viewModelScope.launch {
             _state.update { it.copy(busy = true) }
             try {
-                val entries = _state.value.schedule
-                val response = api.saveSchedule(entries.map { it.toDto() })
+                val response = api.saveSchedule(schedule.toDto())
                 if (!response.ok) {
                     throw ApiException.Http(400, response.error ?: "invalid_schedule")
                 }
@@ -312,7 +332,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         scheduleLoaded = true,
                         lastError = null,
                         message = getApplication<Application>().getString(R.string.schedule_saved),
-                        status = it.status?.copy(entries = entries.size),
+                        status = it.status?.copy(entries = schedule.totalEntries),
                     )
                 }
             } catch (e: CancellationException) {
@@ -322,6 +342,63 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
+
+    /** Returns the current schedule as pretty-printed JSON, or null when empty. */
+    fun exportScheduleText(): String? {
+        val schedule = _state.value.schedule
+        if (schedule.isEmpty) {
+            _state.update {
+                it.copy(message = getApplication<Application>().getString(R.string.schedule_export_empty))
+            }
+            return null
+        }
+        return ScheduleCodec.encode(schedule)
+    }
+
+    fun reportExportResult(success: Boolean) {
+        _state.update {
+            it.copy(
+                message = getApplication<Application>().getString(
+                    if (success) R.string.schedule_export_success else R.string.schedule_export_error,
+                ),
+            )
+        }
+    }
+
+    fun importScheduleText(text: String) {
+        val imported = try {
+            ScheduleCodec.decode(text)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            _state.update {
+                it.copy(message = getApplication<Application>().getString(R.string.schedule_import_error))
+            }
+            return
+        }
+        if (!withinDeviceLimits(imported)) {
+            _state.update {
+                it.copy(message = getApplication<Application>().getString(R.string.schedule_too_large))
+            }
+            return
+        }
+        _state.update {
+            it.copy(
+                schedule = imported,
+                scheduleDirty = true,
+                scheduleLoaded = true,
+                message = getApplication<Application>().getString(
+                    R.string.schedule_import_success,
+                    imported.totalEntries,
+                ),
+            )
+        }
+    }
+
+    private fun withinDeviceLimits(schedule: BellSchedule): Boolean =
+        schedule.groups.size <= MAX_SCHEDULE_GROUPS &&
+            schedule.totalEntries <= MAX_SCHEDULE_ENTRIES &&
+            schedule.exceptions.size <= MAX_DATE_EXCEPTIONS
 
     fun saveSettings(baseUrl: String, token: String, ringDefault: Int) {
         val normalizedUrl = normalizeBaseUrl(baseUrl)
@@ -357,7 +434,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 syncPromptVisible = false,
                 message = null,
                 status = if (urlChanged) null else current.status,
-                schedule = if (urlChanged) emptyList() else current.schedule,
+                schedule = if (urlChanged) BellSchedule() else current.schedule,
                 scheduleDirty = if (urlChanged) false else current.scheduleDirty,
                 scheduleLoaded = if (urlChanged) false else current.scheduleLoaded,
                 scheduleLoadAttempted = if (urlChanged) false else current.scheduleLoadAttempted,
@@ -414,6 +491,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _state.update { it.copy(message = null) }
     }
 
+    fun reportMessage(message: String) {
+        _state.update { it.copy(message = message) }
+    }
+
     private fun handleActionError(e: Throwable) {
         if (e is CancellationException) throw e
         val offline = e is ApiException.NoWifi ||
@@ -455,6 +536,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 "invalid_schedule" -> context.getString(R.string.error_invalid_schedule)
                 "invalid_request" -> context.getString(R.string.error_invalid_request)
                 "too_many_entries" -> context.getString(R.string.error_too_many_entries)
+                "too_many_groups" -> context.getString(R.string.error_too_many_groups)
+                "too_many_exceptions" -> context.getString(R.string.error_too_many_exceptions)
                 "invalid_ring_default" -> context.getString(R.string.error_invalid_ring_default)
                 "invalid_json" -> context.getString(R.string.error_invalid_json)
                 "storage_error" -> context.getString(R.string.error_storage_device)

@@ -1,5 +1,7 @@
 package com.belltimer.app.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -9,32 +11,28 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CloudDownload
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.EventRepeat
+import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -45,82 +43,209 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TimeInput
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.belltimer.app.AppViewModel
 import com.belltimer.app.ConnectionState
 import com.belltimer.app.R
 import com.belltimer.app.UiState
 import com.belltimer.app.data.BellEntry
+import com.belltimer.app.data.MAX_DATE_EXCEPTIONS
 import com.belltimer.app.data.MAX_RING_SECONDS
 import com.belltimer.app.data.MAX_SCHEDULE_ENTRIES
+import com.belltimer.app.data.MAX_SCHEDULE_GROUPS
 import com.belltimer.app.data.MIN_RING_SECONDS
+import com.belltimer.app.data.ScheduleGroup
+import com.belltimer.app.data.sortedSchedule
+import java.time.LocalDate
 
 @Composable
 fun ScheduleScreen(state: UiState, viewModel: AppViewModel) {
-    var showEditor by rememberSaveable { mutableStateOf(false) }
-    var editorIndex by rememberSaveable { mutableStateOf<Int?>(null) }
-    var deleteIndex by rememberSaveable { mutableStateOf<Int?>(null) }
-    var showGenerator by rememberSaveable { mutableStateOf(false) }
-    var showLoadConfirm by rememberSaveable { mutableStateOf(false) }
+    val context = LocalContext.current
+    val schedule = state.schedule
     val online = state.connection == ConnectionState.Online
+    val importErrorMessage = stringResource(R.string.schedule_import_error)
+    val tooManyGroupsMessage = stringResource(R.string.schedule_too_many_groups)
 
-    if (showEditor) {
-        ScheduleEntryDialog(
-            initial = editorIndex?.let { state.schedule.getOrNull(it) },
-            defaultDuration = state.ringSeconds,
-            onDismiss = {
-                showEditor = false
-                editorIndex = null
-            },
-            onConfirm = { entry ->
-                val updated = state.schedule.toMutableList()
-                val index = editorIndex
-                if (index != null && index in updated.indices) {
-                    updated[index] = entry
-                } else {
-                    updated.add(entry)
+    var showGroupDialog by remember { mutableStateOf(false) }
+    var editingGroupId by remember { mutableStateOf<Int?>(null) }
+    var showEntryDialog by remember { mutableStateOf(false) }
+    var entryGroupId by remember { mutableStateOf<Int?>(null) }
+    var entryIndex by remember { mutableStateOf<Int?>(null) }
+    var deleteGroupId by remember { mutableStateOf<Int?>(null) }
+    var deleteEntry by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    var showExceptionDialog by remember { mutableStateOf(false) }
+    var editingExceptionDate by remember { mutableStateOf<LocalDate?>(null) }
+    var deleteExceptionDate by remember { mutableStateOf<LocalDate?>(null) }
+    var showGenerator by remember { mutableStateOf(false) }
+    var showLoadConfirm by remember { mutableStateOf(false) }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            val text = runCatching {
+                context.contentResolver.openInputStream(uri)
+                    ?.bufferedReader()
+                    ?.use { it.readText() }
+            }.getOrNull()
+            if (text == null) {
+                viewModel.reportMessage(importErrorMessage)
+            } else {
+                viewModel.importScheduleText(text)
+            }
+        }
+    }
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri ->
+        if (uri != null) {
+            val text = viewModel.exportScheduleText()
+            val ok = text != null && runCatching {
+                context.contentResolver.openOutputStream(uri)?.use { out ->
+                    out.write(text.toByteArray(Charsets.UTF_8))
                 }
-                viewModel.updateSchedule(updated)
-                showEditor = false
-                editorIndex = null
+            }.isSuccess
+            viewModel.reportExportResult(ok)
+        }
+    }
+
+    if (showGroupDialog) {
+        val editing = schedule.groupById(editingGroupId)
+        GroupDialog(
+            initial = editing,
+            onDismiss = {
+                showGroupDialog = false
+                editingGroupId = null
+            },
+            onConfirm = { name, days ->
+                val current = state.schedule
+                when {
+                    editing == null && current.groups.size >= MAX_SCHEDULE_GROUPS ->
+                        viewModel.reportMessage(tooManyGroupsMessage)
+
+                    else -> {
+                        val updated = if (editing == null) {
+                            current.copy(
+                                groups = current.groups + ScheduleGroup(
+                                    id = current.nextGroupId(),
+                                    name = name,
+                                    days = days,
+                                ),
+                            )
+                        } else {
+                            current.copy(
+                                groups = current.groups.map { group ->
+                                    if (group.id == editing.id) {
+                                        group.copy(name = name, days = days)
+                                    } else {
+                                        group
+                                    }
+                                },
+                            )
+                        }
+                        viewModel.updateSchedule(updated)
+                    }
+                }
+                showGroupDialog = false
+                editingGroupId = null
             },
         )
     }
 
-    deleteIndex?.let { index ->
-        val entry = state.schedule.getOrNull(index)
-        if (entry != null) {
-            val title = "${entry.time} ${entry.label.ifBlank { stringResource(R.string.schedule_no_label) }}"
+    if (showEntryDialog) {
+        val group = schedule.groupById(entryGroupId)
+        if (group != null) {
+            ScheduleEntryDialog(
+                initial = entryIndex?.let { group.entries.getOrNull(it) },
+                defaultDuration = state.ringSeconds,
+                defaultDays = group.days,
+                onDismiss = {
+                    showEntryDialog = false
+                    entryGroupId = null
+                    entryIndex = null
+                },
+                onConfirm = { entry ->
+                    val current = state.schedule
+                    val target = current.groupById(group.id)
+                    if (target != null) {
+                        val entries = target.entries.toMutableList()
+                        val index = entryIndex
+                        if (index != null && index in entries.indices) {
+                            entries[index] = entry
+                        } else if (current.totalEntries < MAX_SCHEDULE_ENTRIES) {
+                            entries.add(entry)
+                        }
+                        viewModel.updateSchedule(
+                            current.copy(
+                                groups = current.groups.map {
+                                    if (it.id == target.id) {
+                                        it.copy(entries = entries.sortedSchedule())
+                                    } else {
+                                        it
+                                    }
+                                },
+                            ),
+                        )
+                    }
+                    showEntryDialog = false
+                    entryGroupId = null
+                    entryIndex = null
+                },
+            )
+        }
+    }
+
+    deleteEntry?.let { (groupId, index) ->
+        val group = schedule.groupById(groupId)
+        val entry = group?.entries?.getOrNull(index)
+        if (group != null && entry != null) {
+            val title = "${entry.time} " +
+                entry.label.ifBlank { stringResource(R.string.schedule_no_label) }
             AlertDialog(
-                onDismissRequest = { deleteIndex = null },
+                onDismissRequest = { deleteEntry = null },
                 title = { Text(stringResource(R.string.schedule_delete_title)) },
                 text = { Text(stringResource(R.string.schedule_delete_text, title)) },
                 confirmButton = {
                     TextButton(
                         onClick = {
-                            val updated = state.schedule.toMutableList()
-                            if (index in updated.indices) updated.removeAt(index)
-                            viewModel.updateSchedule(updated)
-                            deleteIndex = null
+                            val current = state.schedule
+                            val target = current.groupById(groupId)
+                            if (target != null) {
+                                val entries = target.entries.toMutableList()
+                                if (index in entries.indices) entries.removeAt(index)
+                                viewModel.updateSchedule(
+                                    current.copy(
+                                        groups = current.groups.map {
+                                            if (it.id == target.id) {
+                                                it.copy(entries = entries)
+                                            } else {
+                                                it
+                                            }
+                                        },
+                                    ),
+                                )
+                            }
+                            deleteEntry = null
                         },
                     ) {
                         Text(stringResource(R.string.delete))
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = { deleteIndex = null }) {
+                    TextButton(onClick = { deleteEntry = null }) {
                         Text(stringResource(R.string.cancel))
                     }
                 },
@@ -128,13 +253,109 @@ fun ScheduleScreen(state: UiState, viewModel: AppViewModel) {
         }
     }
 
+    deleteGroupId?.let { groupId ->
+        val group = schedule.groupById(groupId)
+        if (group != null) {
+            val title = group.name.ifBlank { stringResource(R.string.schedule_group_untitled) }
+            AlertDialog(
+                onDismissRequest = { deleteGroupId = null },
+                title = { Text(stringResource(R.string.schedule_group_delete_title)) },
+                text = { Text(stringResource(R.string.schedule_group_delete_text, title)) },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            val current = state.schedule
+                            viewModel.updateSchedule(
+                                current.copy(
+                                    groups = current.groups.filterNot { it.id == groupId },
+                                    exceptions = current.exceptions.filterNot {
+                                        !it.mute && it.groupId == groupId
+                                    },
+                                ),
+                            )
+                            deleteGroupId = null
+                        },
+                    ) {
+                        Text(stringResource(R.string.delete))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { deleteGroupId = null }) {
+                        Text(stringResource(R.string.cancel))
+                    }
+                },
+            )
+        }
+    }
+
+    if (showExceptionDialog) {
+        DateExceptionDialog(
+            initial = editingExceptionDate?.let { date -> schedule.exceptionFor(date) },
+            groups = schedule.groups,
+            takenDates = schedule.exceptions.map { it.date }.toSet(),
+            onDismiss = {
+                showExceptionDialog = false
+                editingExceptionDate = null
+            },
+            onConfirm = { exception ->
+                val current = state.schedule
+                viewModel.updateSchedule(
+                    current.copy(
+                        exceptions = (current.exceptions
+                            .filterNot { it.date == exception.date } + exception)
+                            .sortedBy { it.date },
+                    ),
+                )
+                showExceptionDialog = false
+                editingExceptionDate = null
+            },
+        )
+    }
+
+    deleteExceptionDate?.let { date ->
+        AlertDialog(
+            onDismissRequest = { deleteExceptionDate = null },
+            title = { Text(stringResource(R.string.schedule_exception_delete_title)) },
+            text = { Text(stringResource(R.string.schedule_exception_delete_text, date.displayDate())) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val current = state.schedule
+                        viewModel.updateSchedule(
+                            current.copy(exceptions = current.exceptions.filterNot { it.date == date }),
+                        )
+                        deleteExceptionDate = null
+                    },
+                ) {
+                    Text(stringResource(R.string.delete))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteExceptionDate = null }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
+    }
+
     if (showGenerator) {
         GeneratorDialog(
             defaultDuration = state.ringSeconds,
-            existingCount = state.schedule.size,
+            existingGroups = schedule.groups.size,
+            existingEntries = schedule.totalEntries,
             onDismiss = { showGenerator = false },
-            onConfirm = { generated ->
-                viewModel.updateSchedule(state.schedule + generated)
+            onConfirm = { name, days, entries ->
+                val current = state.schedule
+                viewModel.updateSchedule(
+                    current.copy(
+                        groups = current.groups + ScheduleGroup(
+                            id = current.nextGroupId(),
+                            name = name,
+                            days = days,
+                            entries = entries.sortedSchedule(),
+                        ),
+                    ),
+                )
                 showGenerator = false
             },
         )
@@ -178,7 +399,7 @@ fun ScheduleScreen(state: UiState, viewModel: AppViewModel) {
                 Text(
                     text = stringResource(
                         R.string.schedule_count,
-                        state.schedule.size,
+                        schedule.totalEntries,
                         MAX_SCHEDULE_ENTRIES,
                     ),
                     style = MaterialTheme.typography.bodySmall,
@@ -216,28 +437,27 @@ fun ScheduleScreen(state: UiState, viewModel: AppViewModel) {
             )
         }
 
-        Button(
-            onClick = {
-                editorIndex = null
-                showEditor = true
-            },
-            enabled = state.schedule.size < MAX_SCHEDULE_ENTRIES,
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 52.dp),
-        ) {
-            Icon(Icons.Default.Add, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text(
-                text = stringResource(R.string.schedule_add),
-                style = MaterialTheme.typography.titleMedium,
-            )
-        }
-
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = {
+                    editingGroupId = null
+                    showGroupDialog = true
+                },
+                enabled = schedule.groups.size < MAX_SCHEDULE_GROUPS,
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 48.dp),
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.schedule_group_add))
+            }
             OutlinedButton(
                 onClick = { showGenerator = true },
-                modifier = Modifier.weight(1f),
+                enabled = schedule.groups.size < MAX_SCHEDULE_GROUPS,
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 48.dp),
             ) {
                 Icon(
                     Icons.Default.EventRepeat,
@@ -246,6 +466,34 @@ fun ScheduleScreen(state: UiState, viewModel: AppViewModel) {
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(stringResource(R.string.generator_button))
+            }
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                onClick = { importLauncher.launch(arrayOf("application/json", "text/plain", "*/*")) },
+                modifier = Modifier.weight(1f),
+            ) {
+                Icon(
+                    Icons.Default.UploadFile,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(stringResource(R.string.schedule_import))
+            }
+            OutlinedButton(
+                onClick = { exportLauncher.launch(exportFileName()) },
+                enabled = !schedule.isEmpty,
+                modifier = Modifier.weight(1f),
+            ) {
+                Icon(
+                    Icons.Default.Download,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(stringResource(R.string.schedule_export))
             }
             OutlinedButton(
                 onClick = {
@@ -259,7 +507,7 @@ fun ScheduleScreen(state: UiState, viewModel: AppViewModel) {
                     contentDescription = null,
                     modifier = Modifier.size(18.dp),
                 )
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(6.dp))
                 Text(stringResource(R.string.schedule_load))
             }
         }
@@ -268,120 +516,137 @@ fun ScheduleScreen(state: UiState, viewModel: AppViewModel) {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         }
 
-        if (state.schedule.isEmpty()) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Icon(
-                    Icons.Default.CalendarMonth,
-                    contentDescription = null,
-                    modifier = Modifier.size(48.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    text = stringResource(R.string.schedule_empty),
-                    style = MaterialTheme.typography.titleMedium,
-                    textAlign = TextAlign.Center,
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = stringResource(R.string.schedule_empty_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            item(key = "auto") {
+                AutoWindowCard(
+                    auto = schedule.auto,
+                    onChange = { viewModel.updateSchedule(schedule.copy(auto = it)) },
                 )
             }
-        } else {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                itemsIndexed(state.schedule) { index, entry ->
-                    ScheduleEntryCard(
-                        entry = entry,
+
+            item(key = "groups-header") {
+                ScheduleSectionHeader(
+                    title = stringResource(R.string.schedule_groups_title),
+                    hint = stringResource(R.string.schedule_groups_hint),
+                )
+            }
+
+            if (schedule.groups.isEmpty()) {
+                item(key = "groups-empty") {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.CalendarMonth,
+                            contentDescription = null,
+                            modifier = Modifier.size(40.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            text = stringResource(R.string.schedule_no_groups),
+                            style = MaterialTheme.typography.titleSmall,
+                            textAlign = TextAlign.Center,
+                        )
+                        Text(
+                            text = stringResource(R.string.schedule_no_groups_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                }
+            } else {
+                items(schedule.groups, key = { "group-${it.id}" }) { group ->
+                    ScheduleGroupCard(
+                        group = group,
+                        canAddEntry = schedule.totalEntries < MAX_SCHEDULE_ENTRIES,
                         onEdit = {
-                            editorIndex = index
-                            showEditor = true
+                            editingGroupId = group.id
+                            showGroupDialog = true
                         },
-                        onDelete = { deleteIndex = index },
+                        onDelete = { deleteGroupId = group.id },
+                        onAddEntry = {
+                            entryGroupId = group.id
+                            entryIndex = null
+                            showEntryDialog = true
+                        },
+                        onEditEntry = { index ->
+                            entryGroupId = group.id
+                            entryIndex = index
+                            showEntryDialog = true
+                        },
+                        onDeleteEntry = { index -> deleteEntry = group.id to index },
                     )
                 }
             }
+
+            item(key = "exceptions-header") {
+                ScheduleSectionHeader(
+                    title = stringResource(R.string.schedule_exceptions_title),
+                    hint = stringResource(R.string.schedule_exceptions_hint),
+                )
+            }
+
+            if (schedule.exceptions.isEmpty()) {
+                item(key = "exceptions-empty") {
+                    Text(
+                        text = stringResource(R.string.schedule_exceptions_empty),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            } else {
+                items(schedule.exceptions, key = { "exception-${it.date}" }) { exception ->
+                    DateExceptionCard(
+                        exception = exception,
+                        groupName = schedule.groupById(exception.groupId)?.name,
+                        onEdit = {
+                            editingExceptionDate = exception.date
+                            showExceptionDialog = true
+                        },
+                        onDelete = { deleteExceptionDate = exception.date },
+                    )
+                }
+            }
+
+            item(key = "add-exception") {
+                OutlinedButton(
+                    onClick = {
+                        editingExceptionDate = null
+                        showExceptionDialog = true
+                    },
+                    enabled = schedule.exceptions.size < MAX_DATE_EXCEPTIONS,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.schedule_exception_add))
+                }
+            }
+
+            item(key = "bottom-space") { Spacer(Modifier.padding(bottom = 8.dp)) }
         }
     }
 }
 
+private fun exportFileName(): String =
+    "belltimer-schedule-${LocalDate.now()}.json"
+
 @Composable
-private fun daysSummary(days: Set<Int>): String = when {
+fun daysSummary(days: Set<Int>): String = when {
     days.isEmpty() -> stringResource(R.string.schedule_entry_invalid_days)
     days.size == 7 -> stringResource(R.string.days_every_day)
     days == setOf(1, 2, 3, 4, 5) -> stringResource(R.string.days_weekdays)
     else -> days.sorted().map { stringResource(dayLabelRes(it)) }.joinToString(", ")
-}
-
-@Composable
-private fun ScheduleEntryCard(
-    entry: BellEntry,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit,
-) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 12.dp, top = 10.dp, bottom = 10.dp, end = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Surface(
-                color = MaterialTheme.colorScheme.primaryContainer,
-                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                shape = RoundedCornerShape(12.dp),
-            ) {
-                Text(
-                    text = entry.time,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                )
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = entry.label.ifBlank { stringResource(R.string.schedule_no_label) },
-                    style = MaterialTheme.typography.titleSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = daysSummary(entry.days) + " · " +
-                        stringResource(R.string.duration_seconds, entry.duration),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            IconButton(onClick = onEdit) {
-                Icon(
-                    Icons.Default.Edit,
-                    contentDescription = stringResource(R.string.edit_desc),
-                )
-            }
-            IconButton(onClick = onDelete) {
-                Icon(
-                    Icons.Default.Delete,
-                    contentDescription = stringResource(R.string.delete_desc),
-                )
-            }
-        }
-    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -389,6 +654,7 @@ private fun ScheduleEntryCard(
 private fun ScheduleEntryDialog(
     initial: BellEntry?,
     defaultDuration: Int,
+    defaultDays: Set<Int> = (1..7).toSet(),
     onDismiss: () -> Unit,
     onConfirm: (BellEntry) -> Unit,
 ) {
@@ -401,7 +667,7 @@ private fun ScheduleEntryDialog(
     var daysMask by rememberSaveable {
         mutableIntStateOf(
             initial?.days?.fold(0) { mask, day -> mask or (1 shl (day - 1)) }
-                ?: 0x1F,
+                ?: defaultDays.fold(0) { mask, day -> mask or (1 shl (day - 1)) },
         )
     }
     val days = (1..7).filter { daysMask and (1 shl (it - 1)) != 0 }.toSet()
@@ -528,24 +794,47 @@ private fun ScheduleEntryDialog(
     )
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun GeneratorDialog(
     defaultDuration: Int,
-    existingCount: Int,
+    existingGroups: Int,
+    existingEntries: Int,
     onDismiss: () -> Unit,
-    onConfirm: (List<BellEntry>) -> Unit,
+    onConfirm: (name: String, days: Set<Int>, entries: List<BellEntry>) -> Unit,
 ) {
     val timeState = rememberTimePickerState(initialHour = 8, initialMinute = 0, is24Hour = true)
-    var lessonText by rememberSaveable { mutableStateOf("45") }
-    var breakText by rememberSaveable { mutableStateOf("10") }
-    var countText by rememberSaveable { mutableStateOf("7") }
+    var template by rememberSaveable { mutableStateOf(ScheduleTemplate.School45) }
+    var customName by rememberSaveable { mutableStateOf("") }
+    var nameEdited by rememberSaveable { mutableStateOf(false) }
+    var lessonText by rememberSaveable { mutableStateOf(template.lessonMinutes.toString()) }
+    var breakText by rememberSaveable { mutableStateOf(template.breakMinutes.toString()) }
+    var countText by rememberSaveable { mutableStateOf(template.lessonCount.toString()) }
+    var daysMask by rememberSaveable { mutableIntStateOf(0x1F) }
     var errorText by rememberSaveable { mutableStateOf<String?>(null) }
+    val templateName = stringResource(template.groupNameRes)
+    val groupName = if (nameEdited) customName else templateName
+    val days = (1..7).filter { daysMask and (1 shl (it - 1)) != 0 }.toSet()
+
     val invalidMessage = stringResource(R.string.generator_invalid)
     val tooManyMessage = stringResource(R.string.generator_too_many)
     val tooLongMessage = stringResource(R.string.generator_too_long)
+    val tooManyGroupsMessage = stringResource(R.string.generator_too_many_groups)
     val lessonStartLabels = (1..32).map { stringResource(R.string.generator_lesson_start, it) }
     val lessonEndLabels = (1..32).map { stringResource(R.string.generator_lesson_end, it) }
+
+    // Apply the selected preset to the editable fields.
+    LaunchedEffect(template) {
+        lessonText = template.lessonMinutes.toString()
+        breakText = template.breakMinutes.toString()
+        countText = template.lessonCount.toString()
+        nameEdited = false
+        daysMask = template.days.fold(0) { mask, day -> mask or (1 shl (day - 1)) }
+        template.firstLessonMinutes?.let { first ->
+            timeState.hour = first / 60
+            timeState.minute = first % 60
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -558,10 +847,35 @@ private fun GeneratorDialog(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
+                    text = stringResource(R.string.generator_template),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    ScheduleTemplate.entries.forEach { option ->
+                        FilterChip(
+                            selected = option == template,
+                            onClick = { template = option },
+                            label = { Text(stringResource(option.titleRes)) },
+                        )
+                    }
+                }
+                Text(
                     text = stringResource(R.string.generator_hint),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+
+                OutlinedTextField(
+                    value = groupName,
+                    onValueChange = {
+                        customName = it
+                        nameEdited = true
+                    },
+                    label = { Text(stringResource(R.string.generator_group_name)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+
                 Text(
                     text = stringResource(R.string.generator_first_lesson),
                     style = MaterialTheme.typography.labelLarge,
@@ -593,6 +907,30 @@ private fun GeneratorDialog(
                     modifier = Modifier.fillMaxWidth(),
                 )
 
+                Text(
+                    text = stringResource(R.string.generator_days),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    AssistChip(
+                        onClick = { daysMask = 0x1F },
+                        label = { Text(stringResource(R.string.days_weekdays)) },
+                    )
+                    AssistChip(
+                        onClick = { daysMask = 0x7F },
+                        label = { Text(stringResource(R.string.days_every_day)) },
+                    )
+                }
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for (day in 1..7) {
+                        FilterChip(
+                            selected = day in days,
+                            onClick = { daysMask = daysMask xor (1 shl (day - 1)) },
+                            label = { Text(stringResource(dayLabelRes(day))) },
+                        )
+                    }
+                }
+
                 countText.toIntOrNull()?.takeIf { it > 0 }?.let { count ->
                     Text(
                         text = stringResource(R.string.generator_preview, count * 2),
@@ -622,7 +960,15 @@ private fun GeneratorDialog(
                         errorText = invalidMessage
                         return@TextButton
                     }
-                    if (existingCount + count * 2 > MAX_SCHEDULE_ENTRIES) {
+                    if (days.isEmpty() || groupName.isBlank()) {
+                        errorText = invalidMessage
+                        return@TextButton
+                    }
+                    if (existingGroups >= MAX_SCHEDULE_GROUPS) {
+                        errorText = tooManyGroupsMessage
+                        return@TextButton
+                    }
+                    if (existingEntries + count * 2 > MAX_SCHEDULE_ENTRIES) {
                         errorText = tooManyMessage
                         return@TextButton
                     }
@@ -632,25 +978,24 @@ private fun GeneratorDialog(
                         errorText = tooLongMessage
                         return@TextButton
                     }
-                    val allDays = (1..7).toSet()
                     val generated = mutableListOf<BellEntry>()
                     for (index in 0 until count) {
                         val start = first + index * (lesson + breakLength)
                         val end = start + lesson
                         generated += BellEntry(
                             time = minutesToTime(start),
-                            days = allDays,
+                            days = days,
                             duration = defaultDuration,
                             label = lessonStartLabels[index],
                         )
                         generated += BellEntry(
                             time = minutesToTime(end),
-                            days = allDays,
+                            days = days,
                             duration = defaultDuration,
                             label = lessonEndLabels[index],
                         )
                     }
-                    onConfirm(generated)
+                    onConfirm(groupName.trim(), days, generated)
                 },
             ) {
                 Text(stringResource(R.string.generator_apply))

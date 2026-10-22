@@ -5,7 +5,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -14,6 +16,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -21,18 +24,22 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.belltimer.app.R
 import com.belltimer.app.data.MAX_RING_SECONDS
 import com.belltimer.app.data.MIN_RING_SECONDS
 import com.belltimer.app.data.QUICK_RING_SECONDS_MAX
+import kotlin.math.roundToInt
 
 /**
- * Compact bell duration selector: chips for the common 1..10 s range plus a
- * "Другое" chip that reveals a free-form field (1..60 s).
+ * Bell duration selector: a progress-bar style slider over the full 1..60 s
+ * range plus quick chips for the common 1..10 s values. The "Другое" chip
+ * reveals a free-form field.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -56,6 +63,32 @@ fun RingDurationPicker(
                 text = label,
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = MIN_RING_SECONDS.toString(),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Slider(
+                value = seconds.toFloat(),
+                onValueChange = { value ->
+                    onSecondsChange(
+                        value.roundToInt().coerceIn(MIN_RING_SECONDS, MAX_RING_SECONDS),
+                    )
+                },
+                valueRange = MIN_RING_SECONDS.toFloat()..MAX_RING_SECONDS.toFloat(),
+                steps = MAX_RING_SECONDS - MIN_RING_SECONDS - 1,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 8.dp),
+            )
+            Text(
+                text = stringResource(R.string.duration_seconds, seconds),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
             )
         }
 
