@@ -98,37 +98,9 @@ uint32_t suppressMinuteKey = 0;
 bool suppressMinuteSet = false;
 uint32_t lastScheduleMinute = 0xFFFFFFFFUL;
 
-// LED state.
-uint32_t ledLastChangeMs = 0;
-size_t ledStepIndex = 0;
-bool ledSosActive = false;
-
-struct LedStep {
-  bool on;
-  uint16_t durationMs;
-};
-
-const LedStep SOS_PATTERN[] = {
-    {true, 150},   // . 
-    {false, 150},  //
-    {true, 150},   // .
-    {false, 150},  //
-    {true, 150},   // .
-    {false, 450},  // letter gap
-    {true, 450},   // -
-    {false, 150},  //
-    {true, 450},   // -
-    {false, 150},  //
-    {true, 450},   // -
-    {false, 450},  // letter gap
-    {true, 150},   // .
-    {false, 150},  //
-    {true, 150},   // .
-    {false, 150},  //
-    {true, 150},   // .
-    {false, 1500}  // pause before repeating
-};
-const size_t SOS_PATTERN_LEN = sizeof(SOS_PATTERN) / sizeof(SOS_PATTERN[0]);
+// LED blink timings. The phase is derived from millis(), so no state is kept.
+const uint32_t LED_OK_BLINK_MS = 500;    // green, 1 Hz
+const uint32_t LED_FAULT_BLINK_MS = 250; // red, 2 Hz
 
 // --------------------------- Small helpers --------------------------------
 
@@ -576,48 +548,51 @@ void checkSchedule() {
 
 // -------------------------------- LED -------------------------------------
 
-bool hasActiveErrors() { return !rtcOk || !timeIsValid() || !storageOk || !apOk; }
+// Severity of the current fault, if any.
+//   CRITICAL - the bell cannot work at all (no RTC, no storage, no AP)
+//   WARNING  - the bell still rings on demand, but the time is not valid, so
+//              scheduled bells will not fire until the time is set
+enum LedFault : uint8_t {
+  LED_FAULT_NONE,
+  LED_FAULT_WARNING,
+  LED_FAULT_CRITICAL
+};
 
-void resetSos() {
-  ledSosActive = false;
-  ledStepIndex = 0;
-  ledLastChangeMs = millis();
+LedFault currentLedFault() {
+  if (!rtcOk || !storageOk || !apOk) return LED_FAULT_CRITICAL;
+  if (!timeIsValid()) return LED_FAULT_WARNING;
+  return LED_FAULT_NONE;
+}
+
+inline bool blinkPhase(uint32_t nowMs, uint32_t halfPeriodMs) {
+  return (nowMs / halfPeriodMs) % 2UL == 0UL;
 }
 
 // Colour mapping on the KY-029 dual-colour module:
-//   amber (green + red) - the bell is ringing
-//   red SOS             - an error is active (RTC, time, storage or AP)
-//   green 1 Hz blink    - idle and healthy
+//   steady green  - the bell is ringing (nothing blinks while it sounds)
+//   green 1 Hz    - idle and healthy
+//   steady red    - warning: time not set, so the schedule will not fire
+//   red 2 Hz      - critical error: RTC, storage or access point failed
 void updateLed() {
+  uint32_t nowMs = millis();
+
   if (ringing) {
     setLed(true, true);
-    resetSos();
     return;
   }
 
-  if (hasActiveErrors()) {
-    uint32_t nowMs = millis();
-    bool dieOn = false;
-    if (!ledSosActive) {
-      ledSosActive = true;
-      ledStepIndex = 0;
-      ledLastChangeMs = nowMs;
-      dieOn = SOS_PATTERN[0].on;
-    } else {
-      if (nowMs - ledLastChangeMs >= SOS_PATTERN[ledStepIndex].durationMs) {
-        ledLastChangeMs = nowMs;
-        ledStepIndex = (ledStepIndex + 1) % SOS_PATTERN_LEN;
-      }
-      dieOn = SOS_PATTERN[ledStepIndex].on;
-    }
-    // The green die stays dark so the red SOS is unambiguous.
-    setLed(false, dieOn);
-    return;
+  switch (currentLedFault()) {
+    case LED_FAULT_CRITICAL:
+      setLed(false, blinkPhase(nowMs, LED_FAULT_BLINK_MS));
+      return;
+    case LED_FAULT_WARNING:
+      setLed(false, true);
+      return;
+    case LED_FAULT_NONE:
+    default:
+      setLed(blinkPhase(nowMs, LED_OK_BLINK_MS), false);
+      return;
   }
-
-  if (ledSosActive) resetSos();
-  bool on = (millis() / 500UL) % 2UL == 0UL;
-  setLed(on, false);
 }
 
 // ------------------------------ Wi-Fi / AP --------------------------------
@@ -1073,7 +1048,6 @@ void setup() {
 
   rtcLastPollMs = millis();
   rtcLastStatusMs = millis();
-  ledLastChangeMs = millis();
 }
 
 void loop() {
