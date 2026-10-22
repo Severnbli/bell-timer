@@ -121,7 +121,8 @@ code="$(request GET /status "" "${WORK_DIR}/status.json")"
 expect_code 200 "${code}" "GET /status" "${WORK_DIR}/status.json"
 expect_contains "${WORK_DIR}/status.json" '"rtc_ok"' "status contains rtc_ok"
 expect_contains "${WORK_DIR}/status.json" '"errors"' "status contains errors"
-expect_contains "${WORK_DIR}/status.json" '"fw":"1.1.0"' "status contains firmware version"
+expect_contains "${WORK_DIR}/status.json" '"fw":"1.2.0"' "status contains firmware version"
+expect_contains "${WORK_DIR}/status.json" '"api":3' "status reports API level 3"
 
 code="$(request GET /mode "" "${WORK_DIR}/original_mode.json")"
 expect_code 200 "${code}" "GET /mode" "${WORK_DIR}/original_mode.json"
@@ -232,7 +233,7 @@ expect_code 200 "${code}" "GET /schedule default days" \
 expect_contains "${WORK_DIR}/schedule_default_days_get.json" '"days":[1,2,3,4,5,6,7]' \
     "omitted days default to Monday-Sunday"
 
-GROUP_SCHEDULE='{"version":2,"auto":{"start":"2026-01-10","stop":"2026-06-30"},"groups":[{"id":1,"name":"Будни","days":[1,2,3,4,5],"entries":[{"time":"08:00","duration":4,"label":"1 урок"}]},{"id":2,"name":"Суббота","days":[6],"entries":[]}],"exceptions":[{"date":"2026-03-08","mute":true},{"date":"2026-03-09","group_id":2}]}'
+GROUP_SCHEDULE='{"version":2,"auto":{"start":"2026-01-10","stop":"2027-06-30"},"groups":[{"id":1,"name":"Будни","days":[1,2,3,4,5],"entries":[{"time":"08:00","duration":4,"label":"1 урок"}]},{"id":2,"name":"Суббота","days":[6],"entries":[]}],"exceptions":[{"date":"2027-03-08","mute":true},{"date":"2027-03-09","group_id":2}]}'
 code="$(request POST /schedule "${GROUP_SCHEDULE}" "${WORK_DIR}/schedule_groups_post.json")"
 expect_code 200 "${code}" "POST /schedule with groups" \
     "${WORK_DIR}/schedule_groups_post.json"
@@ -244,12 +245,56 @@ expect_code 200 "${code}" "GET /schedule with groups" \
     "${WORK_DIR}/schedule_groups_get.json"
 expect_contains "${WORK_DIR}/schedule_groups_get.json" '"name":"Будни"' \
     "group name is returned"
-expect_contains "${WORK_DIR}/schedule_groups_get.json" '"mute":true' \
-    "date exception is returned"
+expect_contains "${WORK_DIR}/schedule_groups_get.json" '"mode":"mute"' \
+    "version 2 exception is migrated to a mute override"
+expect_contains "${WORK_DIR}/schedule_groups_get.json" '"mode":"replace"' \
+    "version 2 group exception is migrated to a replace override"
+expect_contains "${WORK_DIR}/schedule_groups_get.json" '"based_on":2' \
+    "migrated override keeps its source group"
 expect_contains "${WORK_DIR}/schedule_groups_get.json" '"start":"2026-01-10"' \
     "auto start date is returned"
 
-BAD_GROUP_SCHEDULE='{"groups":[{"id":1,"name":"A","days":[1],"entries":[]}],"exceptions":[{"date":"2026-03-09","group_id":9}]}'
+V3_SCHEDULE='{"version":3,"groups":[{"id":1,"name":"Будни","days":[1,2,3,4,5],"entries":[{"time":"08:00","duration":4,"label":"1 урок"}]}],"overrides":[{"date":"2027-03-07","mode":"mute"},{"date":"2027-03-06","mode":"replace","based_on":1,"entries":[{"time":"10:00","duration":6,"label":"суббота"}]},{"date":"2027-03-13","mode":"add","entries":[{"time":"12:30","duration":10,"label":"доп"}]}]}'
+code="$(request POST /schedule "${V3_SCHEDULE}" "${WORK_DIR}/schedule_v3_post.json")"
+expect_code 200 "${code}" "POST /schedule with overrides" \
+    "${WORK_DIR}/schedule_v3_post.json"
+expect_contains "${WORK_DIR}/schedule_v3_post.json" '"overrides":3' \
+    "override count is reported"
+
+code="$(request GET /schedule "" "${WORK_DIR}/schedule_v3_get.json")"
+expect_code 200 "${code}" "GET /schedule after v3 save" \
+    "${WORK_DIR}/schedule_v3_get.json"
+expect_contains "${WORK_DIR}/schedule_v3_get.json" '"version":3' \
+    "stored schedule is returned as version 3"
+expect_contains "${WORK_DIR}/schedule_v3_get.json" '"mode":"add"' \
+    "add override is returned"
+
+code="$(request GET "/schedule/day?date=2027-03-06" "" "${WORK_DIR}/day_replace.json")"
+expect_code 200 "${code}" "GET /schedule/day replace" "${WORK_DIR}/day_replace.json"
+expect_contains "${WORK_DIR}/day_replace.json" '"time":"10:00"' \
+    "replaced day uses the override bell list"
+
+code="$(request GET "/schedule/day?date=2027-03-07" "" "${WORK_DIR}/day_mute.json")"
+expect_code 200 "${code}" "GET /schedule/day mute" "${WORK_DIR}/day_mute.json"
+expect_contains "${WORK_DIR}/day_mute.json" '"bells":[]' "muted day has no bells"
+
+code="$(request GET "/schedule/day?date=2027-03-08" "" "${WORK_DIR}/day_weekday.json")"
+expect_code 200 "${code}" "GET /schedule/day weekday" "${WORK_DIR}/day_weekday.json"
+expect_contains "${WORK_DIR}/day_weekday.json" '"time":"08:00"' \
+    "weekday uses the weekly schedule"
+
+code="$(request GET "/schedule/day?date=2027-03-13" "" "${WORK_DIR}/day_add.json")"
+expect_code 200 "${code}" "GET /schedule/day add" "${WORK_DIR}/day_add.json"
+expect_contains "${WORK_DIR}/day_add.json" '"time":"12:30"' \
+    "added bell is part of the resolved day"
+
+code="$(request GET "/schedule/day?date=2026-13-01" "" "${WORK_DIR}/day_invalid.json")"
+expect_code 400 "${code}" "GET /schedule/day rejects an invalid date" \
+    "${WORK_DIR}/day_invalid.json"
+expect_contains "${WORK_DIR}/day_invalid.json" '"error":"invalid_date"' \
+    "invalid date error code"
+
+BAD_GROUP_SCHEDULE='{"groups":[{"id":1,"name":"A","days":[1],"entries":[]}],"exceptions":[{"date":"2027-03-09","group_id":9}]}'
 code="$(request POST /schedule "${BAD_GROUP_SCHEDULE}" "${WORK_DIR}/schedule_bad_group.json")"
 expect_code 400 "${code}" "POST /schedule rejects unknown exception group" \
     "${WORK_DIR}/schedule_bad_group.json"
@@ -276,6 +321,27 @@ expect_code 400 "${code}" "POST /schedule rejects more than 256 entries" \
     "${WORK_DIR}/schedule_too_many.json"
 expect_contains "${WORK_DIR}/schedule_too_many.json" '"error":"too_many_entries"' \
     "too many entries error code"
+
+MANY_OVERRIDES='{"groups":[{"id":1,"name":"A","days":[1],"entries":[]}],"overrides":['
+override_count=0
+for month in 01 02 03 04; do
+    for day in $(seq -w 1 28); do
+        override_count=$((override_count + 1))
+        if [[ "${override_count}" -gt 91 ]]; then
+            break 2
+        fi
+        if [[ "${override_count}" -gt 1 ]]; then
+            MANY_OVERRIDES+=','
+        fi
+        MANY_OVERRIDES+="{\"date\":\"2027-${month}-${day}\",\"mode\":\"mute\"}"
+    done
+done
+MANY_OVERRIDES+=']}'
+code="$(request POST /schedule "${MANY_OVERRIDES}" "${WORK_DIR}/schedule_too_many_overrides.json")"
+expect_code 400 "${code}" "POST /schedule rejects more than 90 overrides" \
+    "${WORK_DIR}/schedule_too_many_overrides.json"
+expect_contains "${WORK_DIR}/schedule_too_many_overrides.json" \
+    '"error":"too_many_overrides"' "too many overrides error code"
 
 # --- Settings -------------------------------------------------------------
 code="$(request POST /settings '{"ring_default":7}' "${WORK_DIR}/settings_post.json")"
