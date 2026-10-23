@@ -28,11 +28,11 @@
 
 namespace {
 
-const char *const FW_VERSION = "1.3.0";
+const char *const FW_VERSION = "2.0.0";
 
-// API level reported by GET /status. Level 4 replaces groups/overrides with
-// ordered packs (base packs plus corrections).
-const uint8_t API_VERSION = 4;
+// API level reported by GET /status. Level 5 replaces the raw entries of a
+// pack with typed modules (bell, lesson, series).
+const uint8_t API_VERSION = 5;
 
 // ----------------------------- Configuration ------------------------------
 
@@ -52,20 +52,29 @@ const bool LED_ACTIVE_LOW = BELLTIMER_LED_ACTIVE_LOW;
 const uint8_t PIN_I2C_SDA = BELLTIMER_PIN_I2C_SDA;
 const uint8_t PIN_I2C_SCL = BELLTIMER_PIN_I2C_SCL;
 
-// A schedule is an ordered list of packs ("пачки"). A base pack contributes
-// its entries; a correction cancels the entries of every base pack above it.
-// Packs can have a date range, individual dates and a yearly repeat. Auto mode
-// can still be limited to a global date range. The limits below are mirrored
-// by the Android app (data/Models.kt).
-const size_t MAX_PACKS = 6;           // ordered packs
-const size_t MAX_PACK_ENTRIES = 32;   // entries inside one pack
-const size_t MAX_PACK_DATES = 24;     // individual dates inside one pack
-const size_t MAX_ENTRIES = MAX_PACKS * MAX_PACK_ENTRIES;
-const size_t MAX_LABEL_BYTES = 32;    // About 10 Cyrillic characters in UTF-8.
+// A schedule is an ordered list of packs ("пачки"). A pack holds modules; a
+// module expands into one or more bells (a lesson rings at its start and its
+// end, a series rings every N minutes). A base pack contributes its bells; a
+// correction cancels the bells of every base pack above it. The limits below
+// are mirrored by the Android app (data/Schedule.kt).
+const size_t MAX_PACKS = 6;            // ordered packs
+const size_t MAX_PACK_MODULES = 32;    // modules inside one pack
+const size_t MAX_PACK_DATES = 24;      // individual dates inside one pack
+const size_t MAX_MODULES = MAX_PACKS * MAX_PACK_MODULES;
+const size_t MAX_LABEL_BYTES = 32;     // About 10 Cyrillic characters in UTF-8.
 const size_t MAX_PACK_NAME_BYTES = 32;
 // Bodies larger than this are rejected before parsing, so an oversized
 // document cannot exhaust the heap.
 const size_t MAX_SCHEDULE_BODY_BYTES = 32768;
+const uint16_t MINUTES_PER_DAY = 1440;
+const uint16_t MAX_LESSON_MINUTES = 720;
+const uint8_t MAX_PRE_MINUTES = 60;
+const uint16_t MAX_SERIES_STEP = 720;
+// GET /status looks this many days ahead (today included) for the next bell.
+const uint8_t NEXT_BELL_HORIZON_DAYS = 8;
+// A bell may still fire this many seconds into its minute, so a loop that was
+// busy at second 0 (for example while writing flash) does not lose it.
+const uint8_t RING_GRACE_SEC = 5;
 const uint8_t MIN_RING_SEC = 1;
 const uint8_t MAX_RING_SEC = 60;
 const uint8_t DEFAULT_RING_SEC = 5;
@@ -82,11 +91,30 @@ const uint32_t AP_IP_CHECK_MS = 5000;
 
 // ------------------------------- Types ------------------------------------
 
-struct ScheduleEntry {
-  uint16_t minuteOfDay = 0;       // 0..1439
-  uint16_t pairMinuteOfDay = 0xFFFF;  // 0xFFFF = no pair
+enum ModuleType : uint8_t {
+  MODULE_BELL = 0,    // one bell at "time"
+  MODULE_LESSON = 1,  // bells at "time" and "time" + "length", optional warning
+  MODULE_SERIES = 2,  // a bell every "every" minutes from "time" to "until"
+};
+
+// What one resolved bell means inside its module.
+enum BellRole : uint8_t {
+  ROLE_BELL = 0,
+  ROLE_START = 1,
+  ROLE_END = 2,
+  ROLE_PRE = 3,
+  ROLE_STEP = 4,
+};
+
+struct ScheduleModule {
+  uint8_t type = MODULE_BELL;
+  uint8_t packId = 0;              // owning pack
   uint8_t daysMask = ALL_DAYS_MASK;
-  uint8_t packId = 0;             // owning pack
+  uint8_t pre = 0;                 // lesson: warning N minutes before, 0 = none
+  uint16_t start = 0;              // minute of day, 0..1439
+  uint16_t length = 0;             // lesson: minutes
+  uint16_t until = 0;              // series: last allowed minute of day
+  uint16_t every = 0;              // series: step in minutes
   String label;
 };
 
@@ -100,7 +128,7 @@ struct SchedulePack {
   uint8_t kind = PACK_BASE;
   bool enabled = true;
   bool yearly = false;
-  bool mute = false;  // legacy correction that only cancels the packs above
+  bool mute = false;  // correction that only cancels the packs above (a holiday)
   uint32_t fromKey = 0;  // YYYYMMDD, 0 = no limit
   uint32_t toKey = 0;
   uint32_t dates[MAX_PACK_DATES];  // 0 = unused
@@ -120,9 +148,10 @@ bool apOk = false;
 
 uint8_t ringDefault = DEFAULT_RING_SEC;
 String currentMode = "auto";
+String lastSync;  // local time of the last POST /time, empty = never
 
-ScheduleEntry entries[MAX_ENTRIES];
-size_t entryCount = 0;
+ScheduleModule modules[MAX_MODULES];
+size_t moduleCount = 0;
 
 SchedulePack packs[MAX_PACKS];
 size_t packCount = 0;
@@ -131,10 +160,13 @@ size_t packCount = 0;
 uint32_t autoStartDate = 0;
 uint32_t autoStopDate = 0;
 
+// Bumped whenever the live schedule changes; invalidates cached results.
+uint32_t scheduleRevision = 0;
+
 // Scratch buffers filled by parseScheduleDocument() and committed only after
-// the document has been validated and written to flash.
-ScheduleEntry parsedEntries[MAX_ENTRIES];
-size_t parsedEntryCount = 0;
+// the document has been validated.
+ScheduleModule parsedModules[MAX_MODULES];
+size_t parsedModuleCount = 0;
 SchedulePack parsedPacks[MAX_PACKS];
 size_t parsedPackCount = 0;
 uint32_t parsedAutoStart = 0;
@@ -152,7 +184,6 @@ bool storageRetryPending = false;
 
 bool ringing = false;
 uint32_t ringEndMs = 0;
-uint32_t ringLastTickMs = 0;
 int ringLeftSec = 0;
 
 uint32_t suppressMinuteKey = 0;
@@ -219,24 +250,8 @@ bool parseTwoDigits(const String &s, size_t pos, int &out) {
   return true;
 }
 
-bool parseDateTime(const String &s, DateTime &out) {
-  if (s.length() != 19) return false;
-  if (s[4] != '-' || s[7] != '-' || s[10] != 'T' || s[13] != ':' || s[16] != ':') {
-    return false;
-  }
-  int year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
-  for (size_t i = 0; i < 4; ++i) {
-    char c = s[i];
-    if (c < '0' || c > '9') return false;
-    year = year * 10 + (c - '0');
-  }
-  if (!parseTwoDigits(s, 5, month) || !parseTwoDigits(s, 8, day) ||
-      !parseTwoDigits(s, 11, hour) || !parseTwoDigits(s, 14, minute) ||
-      !parseTwoDigits(s, 17, second)) {
-    return false;
-  }
-  if (year < 2024 || year > 2099 || month < 1 || month > 12 || day < 1 ||
-      hour > 23 || minute > 59 || second > 59) {
+bool validDateParts(int year, int month, int day) {
+  if (year < 2024 || year > 2099 || month < 1 || month > 12 || day < 1) {
     return false;
   }
   static const uint8_t DAYS_IN_MONTH[12] = {31, 28, 31, 30, 31, 30,
@@ -244,7 +259,34 @@ bool parseDateTime(const String &s, DateTime &out) {
   uint8_t maxDay = DAYS_IN_MONTH[month - 1];
   bool leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
   if (month == 2 && leap) maxDay = 29;
-  if (day > maxDay) return false;
+  return day <= maxDay;
+}
+
+bool parseYear(const String &s, int &year) {
+  year = 0;
+  for (size_t i = 0; i < 4; ++i) {
+    char c = s[i];
+    if (c < '0' || c > '9') return false;
+    year = year * 10 + (c - '0');
+  }
+  return true;
+}
+
+bool parseDateTime(const String &s, DateTime &out) {
+  if (s.length() != 19) return false;
+  if (s[4] != '-' || s[7] != '-' || s[10] != 'T' || s[13] != ':' || s[16] != ':') {
+    return false;
+  }
+  int year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
+  if (!parseYear(s, year)) return false;
+  if (!parseTwoDigits(s, 5, month) || !parseTwoDigits(s, 8, day) ||
+      !parseTwoDigits(s, 11, hour) || !parseTwoDigits(s, 14, minute) ||
+      !parseTwoDigits(s, 17, second)) {
+    return false;
+  }
+  if (!validDateParts(year, month, day) || hour > 23 || minute > 59 || second > 59) {
+    return false;
+  }
   out = DateTime(year, month, day, hour, minute, second);
   return true;
 }
@@ -258,27 +300,11 @@ bool parseTimeOfDay(const String &s, uint16_t &minuteOfDay) {
   return true;
 }
 
-bool validDateParts(int year, int month, int day) {
-  if (year < 2024 || year > 2099 || month < 1 || month > 12 || day < 1) {
-    return false;
-  }
-  static const uint8_t DAYS_IN_MONTH[12] = {31, 28, 31, 30, 31, 30,
-                                            31, 31, 30, 31, 30, 31};
-  uint8_t maxDay = DAYS_IN_MONTH[month - 1];
-  bool leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
-  if (month == 2 && leap) maxDay = 29;
-  return day <= maxDay;
-}
-
 // Parses "YYYY-MM-DD" into a comparable YYYYMMDD key.
 bool parseDateKey(const String &s, uint32_t &key) {
   if (s.length() != 10 || s[4] != '-' || s[7] != '-') return false;
   int year = 0, month = 0, day = 0;
-  for (size_t i = 0; i < 4; ++i) {
-    char c = s[i];
-    if (c < '0' || c > '9') return false;
-    year = year * 10 + (c - '0');
-  }
+  if (!parseYear(s, year)) return false;
   if (!parseTwoDigits(s, 5, month) || !parseTwoDigits(s, 8, day)) return false;
   if (!validDateParts(year, month, day)) return false;
   key = static_cast<uint32_t>(year) * 10000UL + month * 100UL + day;
@@ -307,6 +333,10 @@ uint8_t isoWeekdayFromDateKey(uint32_t key) {
   return w == 0 ? 7 : static_cast<uint8_t>(w);
 }
 
+uint8_t weekdayMaskOf(uint32_t dateKey) {
+  return static_cast<uint8_t>(1U << (isoWeekdayFromDateKey(dateKey) - 1));
+}
+
 // Shifts a YYYYMMDD key by whole days.
 uint32_t addDaysToDateKey(uint32_t key, int days) {
   DateTime base(static_cast<int>(key / 10000UL),
@@ -320,17 +350,22 @@ const char *packKindName(uint8_t kind) {
   return kind == PACK_CORRECTION ? "correction" : "base";
 }
 
-bool parsePackKind(JsonVariant value, uint8_t &kind) {
-  if (!value.is<const char *>()) return false;
-  String raw = String(value.as<const char *>());
-  if (raw == "base") {
-    kind = PACK_BASE;
-  } else if (raw == "correction") {
-    kind = PACK_CORRECTION;
-  } else {
-    return false;
+const char *moduleTypeName(uint8_t type) {
+  switch (type) {
+    case MODULE_LESSON: return "lesson";
+    case MODULE_SERIES: return "series";
+    default: return "bell";
   }
-  return true;
+}
+
+const char *bellRoleName(uint8_t role) {
+  switch (role) {
+    case ROLE_START: return "start";
+    case ROLE_END: return "end";
+    case ROLE_PRE: return "pre";
+    case ROLE_STEP: return "step";
+    default: return "bell";
+  }
 }
 
 bool sameMonthDay(uint32_t a, uint32_t b) {
@@ -426,6 +461,7 @@ bool saveSettingsToFlash() {
   JsonDocument doc;
   doc["ring_default"] = ringDefault;
   doc["mode"] = currentMode;
+  if (lastSync.length() > 0) doc["synced"] = lastSync;
   String payload;
   serializeJson(doc, payload);
   bool ok = storageOk && writeFileAtomic(SETTINGS_FILE, payload);
@@ -439,6 +475,7 @@ bool saveSettingsToFlash() {
 void loadSettingsFromFlash() {
   ringDefault = DEFAULT_RING_SEC;
   currentMode = "auto";
+  lastSync = "";
   if (!storageOk) return;
   File in = LittleFS.open(SETTINGS_FILE, "r");
   if (!in) return;
@@ -452,34 +489,46 @@ void loadSettingsFromFlash() {
   }
   const char *m = doc["mode"] | "auto";
   currentMode = sanitizeMode(String(m));
+  const char *synced = doc["synced"] | "";
+  DateTime parsed;
+  if (parseDateTime(String(synced), parsed)) lastSync = String(synced);
 }
 
 // --------------------------- Schedule document ----------------------------
 //
-// Canonical document (version 4):
+// Canonical document (version 5):
 // {
-//   "version": 4,
+//   "version": 5,
 //   "auto": {"start": "YYYY-MM-DD", "stop": "YYYY-MM-DD"},
 //   "packs": [
 //     {"id": 1, "name": "Будни", "kind": "base", "enabled": true,
 //      "yearly": false, "from": "YYYY-MM-DD", "to": "YYYY-MM-DD",
 //      "dates": ["YYYY-MM-DD"],
-//      "entries": [{"time": "08:00", "pair": "08:45", "days": [...], "label": "..."}]},
-//     {"id": 2, "name": "Коррекция", "kind": "correction", "dates": ["YYYY-MM-DD"],
-//      "entries": [{"time": "10:00", "days": [...]}]}
+//      "modules": [
+//        {"type": "lesson", "time": "08:00", "length": 45, "pre": 2,
+//         "days": [1, 2, 3, 4, 5], "label": "1 урок"},
+//        {"type": "bell", "time": "12:00", "days": [...], "label": "Обед"},
+//        {"type": "series", "time": "09:00", "until": "17:00", "every": 60}
+//      ]},
+//     {"id": 2, "name": "Праздник", "kind": "correction", "mute": true,
+//      "dates": ["YYYY-MM-DD"], "modules": []}
 //   ]
 // }
-// Version 1 (flat "entries"), version 2 ("exceptions") and version 3
-// ("groups"/"overrides") documents are migrated in memory.
+// Version 4 packs ("entries" with an optional "pair") are migrated in memory:
+// an entry with a pair becomes a lesson, any other entry a bell.
 
 bool parseDaysMask(JsonVariant value, uint8_t &mask) {
+  // Missing or empty means "every day", matching the app's decoder.
   if (value.isNull()) {
     mask = ALL_DAYS_MASK;
     return true;
   }
   if (!value.is<JsonArray>()) return false;
   JsonArray days = value.as<JsonArray>();
-  if (days.size() == 0) return false;
+  if (days.size() == 0) {
+    mask = ALL_DAYS_MASK;
+    return true;
+  }
   uint8_t parsed = 0;
   for (JsonVariant dayValue : days) {
     if (!dayValue.is<int>()) return false;
@@ -491,45 +540,127 @@ bool parseDaysMask(JsonVariant value, uint8_t &mask) {
   return true;
 }
 
-bool parseScheduleEntry(JsonObject obj, uint8_t packId, ScheduleEntry &out) {
-  JsonVariant timeValue = obj["time"];
-  if (!timeValue.is<const char *>()) return false;
-  uint16_t minuteOfDay = 0;
-  if (!parseTimeOfDay(String(timeValue.as<const char *>()), minuteOfDay)) {
+bool parseTimeField(JsonVariant value, uint16_t &minuteOfDay) {
+  if (!value.is<const char *>()) return false;
+  return parseTimeOfDay(String(value.as<const char *>()), minuteOfDay);
+}
+
+bool parseLabelField(JsonVariant value, String &label, size_t maxBytes) {
+  label = "";
+  if (value.isNull()) return true;
+  if (!value.is<const char *>()) return false;
+  label = truncateUtf8(String(value.as<const char *>()), maxBytes);
+  return true;
+}
+
+// Reads an optional integer field within [minValue, maxValue].
+bool parseIntField(JsonVariant value, int minValue, int maxValue, int fallback, int &out) {
+  if (value.isNull()) {
+    out = fallback;
+    return true;
+  }
+  if (!value.is<int>()) return false;
+  int parsed = value.as<int>();
+  if (parsed < minValue || parsed > maxValue) return false;
+  out = parsed;
+  return true;
+}
+
+bool parseModuleType(JsonVariant value, uint8_t &type) {
+  if (value.isNull()) {
+    type = MODULE_BELL;
+    return true;
+  }
+  if (!value.is<const char *>()) return false;
+  String raw = String(value.as<const char *>());
+  if (raw == "bell") {
+    type = MODULE_BELL;
+  } else if (raw == "lesson") {
+    type = MODULE_LESSON;
+  } else if (raw == "series") {
+    type = MODULE_SERIES;
+  } else {
     return false;
   }
+  return true;
+}
 
-  uint16_t pairMinuteOfDay = 0xFFFF;
+bool parseModule(JsonObject obj, uint8_t packId, ScheduleModule &out) {
+  uint8_t type = MODULE_BELL;
+  if (!parseModuleType(obj["type"], type)) return false;
+  uint16_t start = 0;
+  if (!parseTimeField(obj["time"], start)) return false;
+  uint8_t daysMask = ALL_DAYS_MASK;
+  if (!parseDaysMask(obj["days"], daysMask)) return false;
+  String label;
+  if (!parseLabelField(obj["label"], label, MAX_LABEL_BYTES)) return false;
+
+  out.type = type;
+  out.packId = packId;
+  out.daysMask = daysMask;
+  out.start = start;
+  out.pre = 0;
+  out.length = 0;
+  out.until = 0;
+  out.every = 0;
+  out.label = label;
+
+  if (type == MODULE_LESSON) {
+    int length = 0;
+    int pre = 0;
+    if (obj["length"].isNull()) return false;
+    if (!parseIntField(obj["length"], 1, MAX_LESSON_MINUTES, 0, length)) return false;
+    if (!parseIntField(obj["pre"], 0, MAX_PRE_MINUTES, 0, pre)) return false;
+    if (start + length >= MINUTES_PER_DAY) return false;
+    if (pre > start) return false;
+    out.length = static_cast<uint16_t>(length);
+    out.pre = static_cast<uint8_t>(pre);
+  } else if (type == MODULE_SERIES) {
+    uint16_t until = 0;
+    int every = 0;
+    if (!parseTimeField(obj["until"], until)) return false;
+    if (until <= start) return false;
+    if (obj["every"].isNull()) return false;
+    if (!parseIntField(obj["every"], 1, MAX_SERIES_STEP, 0, every)) return false;
+    out.until = until;
+    out.every = static_cast<uint16_t>(every);
+  }
+  return true;
+}
+
+// Version 4 entry: "time", optional "pair", "days", "label".
+bool parseLegacyEntry(JsonObject obj, uint8_t packId, ScheduleModule &out) {
+  uint16_t start = 0;
+  if (!parseTimeField(obj["time"], start)) return false;
+  uint8_t daysMask = ALL_DAYS_MASK;
+  if (!parseDaysMask(obj["days"], daysMask)) return false;
+  String label;
+  if (!parseLabelField(obj["label"], label, MAX_LABEL_BYTES)) return false;
+
+  out.type = MODULE_BELL;
+  out.packId = packId;
+  out.daysMask = daysMask;
+  out.start = start;
+  out.pre = 0;
+  out.length = 0;
+  out.until = 0;
+  out.every = 0;
+  out.label = label;
+
   JsonVariant pairValue = obj["pair"];
   if (!pairValue.isNull()) {
-    if (!pairValue.is<const char *>()) return false;
-    uint16_t parsedPair = 0;
-    if (!parseTimeOfDay(String(pairValue.as<const char *>()), parsedPair)) return false;
-    pairMinuteOfDay = parsedPair;
-  }
-
-  uint8_t daysMask = ALL_DAYS_MASK;
-  JsonVariant daysValue = obj["days"];
-  if (!daysValue.isNull()) {
-    if (!daysValue.is<JsonArray>()) return false;
-    // An empty list means \"every day\", matching the app's decoder.
-    if (daysValue.as<JsonArray>().size() > 0 && !parseDaysMask(daysValue, daysMask)) {
-      return false;
+    uint16_t pair = 0;
+    if (!parseTimeField(pairValue, pair)) return false;
+    if (pair != start) {
+      uint16_t first = start < pair ? start : pair;
+      uint16_t second = start < pair ? pair : start;
+      if (second - first <= MAX_LESSON_MINUTES) {
+        out.type = MODULE_LESSON;
+        out.start = first;
+        out.length = second - first;
+      }
     }
   }
-
-  String label;
-  JsonVariant labelValue = obj["label"];
-  if (!labelValue.isNull()) {
-    if (!labelValue.is<const char *>()) return false;
-    label = truncateUtf8(String(labelValue.as<const char *>()), MAX_LABEL_BYTES);
-  }
-
-  out.minuteOfDay = minuteOfDay;
-  out.pairMinuteOfDay = pairMinuteOfDay;
-  out.daysMask = daysMask;
-  out.packId = packId;
-  out.label = label;
   return true;
 }
 
@@ -540,428 +671,136 @@ bool parsedPackExists(uint8_t id) {
   return false;
 }
 
-// Appends a new parsed pack and returns its id (0 when the limit is reached).
-uint8_t beginParsedPack(uint8_t kind, const String &name, bool mute) {
-  if (parsedPackCount >= MAX_PACKS) return 0;
-  SchedulePack &pack = parsedPacks[parsedPackCount];
-  pack.id = static_cast<uint8_t>(parsedPackCount + 1);
-  pack.kind = kind;
-  pack.enabled = true;
-  pack.yearly = false;
-  pack.mute = mute;
-  pack.fromKey = 0;
-  pack.toKey = 0;
-  pack.dateCount = 0;
-  pack.name = name;
-  ++parsedPackCount;
-  return pack.id;
-}
-
-// Finds the pack that a version 2 "group_id" exception refers to.
-uint8_t legacyPackIdForGroup(uint8_t originalId, const uint8_t *groupIds,
-                             const uint8_t *packIds, size_t count) {
-  for (size_t i = 0; i < count; ++i) {
-    if (groupIds[i] == originalId) return packIds[i];
+bool parsePackKind(JsonVariant value, uint8_t &kind) {
+  if (value.isNull()) {
+    kind = PACK_BASE;
+    return true;
   }
-  return 0;
+  if (!value.is<const char *>()) return false;
+  String raw = String(value.as<const char *>());
+  if (raw == "base") {
+    kind = PACK_BASE;
+  } else if (raw == "correction") {
+    kind = PACK_CORRECTION;
+  } else {
+    return false;
+  }
+  return true;
 }
 
-// Migrates version 1/2/3 documents into packs.
-const char *parseLegacySchedule(JsonDocument &doc) {
-  JsonVariant groupsValue = doc["groups"];
-  JsonVariant overridesValue = doc["overrides"];
-  JsonVariant exceptionsValue = doc["exceptions"];
-  if (!overridesValue.isNull() && !exceptionsValue.isNull()) {
+bool parseBoolField(JsonVariant value, bool fallback, bool &out) {
+  if (value.isNull()) {
+    out = fallback;
+    return true;
+  }
+  if (!value.is<bool>()) return false;
+  out = value.as<bool>();
+  return true;
+}
+
+bool parseDateField(JsonVariant value, uint32_t &key) {
+  key = 0;
+  if (value.isNull()) return true;
+  if (!value.is<const char *>()) return false;
+  return parseDateKey(String(value.as<const char *>()), key);
+}
+
+// Parses one pack object and its modules into the scratch buffers.
+const char *parsePack(JsonObject packObj) {
+  uint8_t packId = static_cast<uint8_t>(parsedPackCount + 1);
+  JsonVariant idValue = packObj["id"];
+  if (!idValue.isNull()) {
+    if (!idValue.is<int>()) return "invalid_schedule";
+    int id = idValue.as<int>();
+    if (id < 1 || id > 255) return "invalid_schedule";
+    packId = static_cast<uint8_t>(id);
+  }
+  if (parsedPackExists(packId)) return "invalid_schedule";
+
+  SchedulePack pack;
+  pack.id = packId;
+  if (!parsePackKind(packObj["kind"], pack.kind)) return "invalid_schedule";
+  if (!parseBoolField(packObj["enabled"], true, pack.enabled)) return "invalid_schedule";
+  if (!parseBoolField(packObj["yearly"], false, pack.yearly)) return "invalid_schedule";
+  if (!parseBoolField(packObj["mute"], false, pack.mute)) return "invalid_schedule";
+  if (pack.mute && pack.kind != PACK_CORRECTION) return "invalid_schedule";
+  if (!parseLabelField(packObj["name"], pack.name, MAX_PACK_NAME_BYTES)) {
+    return "invalid_schedule";
+  }
+  if (!parseDateField(packObj["from"], pack.fromKey)) return "invalid_schedule";
+  if (!parseDateField(packObj["to"], pack.toKey)) return "invalid_schedule";
+  if (!pack.yearly && pack.fromKey != 0 && pack.toKey != 0 && pack.toKey < pack.fromKey) {
     return "invalid_schedule";
   }
 
-  uint8_t legacyGroupIds[MAX_PACKS];
-  uint8_t legacyPackIds[MAX_PACKS];
-  size_t legacyGroupCount = 0;
-
-  if (!groupsValue.isNull()) {
-    if (!groupsValue.is<JsonArray>()) return "invalid_schedule";
-    JsonArray groupsArray = groupsValue.as<JsonArray>();
-    if (groupsArray.size() > MAX_PACKS) return "too_many_packs";
-
-    for (JsonVariant groupValue : groupsArray) {
-      if (!groupValue.is<JsonObject>()) return "invalid_schedule";
-      JsonObject groupObj = groupValue.as<JsonObject>();
-
-      uint8_t originalId = static_cast<uint8_t>(legacyGroupCount + 1);
-      JsonVariant idValue = groupObj["id"];
-      if (!idValue.isNull()) {
-        if (!idValue.is<int>()) return "invalid_schedule";
-        int id = idValue.as<int>();
-        if (id < 1 || id > 255) return "invalid_schedule";
-        originalId = static_cast<uint8_t>(id);
-      }
-
-      uint8_t groupDays = ALL_DAYS_MASK;
-      if (!parseDaysMask(groupObj["days"], groupDays)) return "invalid_schedule";
-      if (groupDays == 0) return "invalid_schedule";
-
-      String name;
-      JsonVariant nameValue = groupObj["name"];
-      if (!nameValue.isNull()) {
-        if (!nameValue.is<const char *>()) return "invalid_schedule";
-        name = truncateUtf8(String(nameValue.as<const char *>()), MAX_PACK_NAME_BYTES);
-      }
-
-      JsonVariant entriesValue = groupObj["entries"];
-      if (entriesValue.isNull() || !entriesValue.is<JsonArray>()) {
+  JsonVariant datesValue = packObj["dates"];
+  if (!datesValue.isNull()) {
+    if (!datesValue.is<JsonArray>()) return "invalid_schedule";
+    JsonArray datesArray = datesValue.as<JsonArray>();
+    if (datesArray.size() > MAX_PACK_DATES) return "too_many_pack_dates";
+    for (JsonVariant dateValue : datesArray) {
+      uint32_t key = 0;
+      if (!dateValue.is<const char *>() || !parseDateField(dateValue, key)) {
         return "invalid_schedule";
       }
-      JsonArray entriesArray = entriesValue.as<JsonArray>();
-      if (entriesArray.size() > MAX_PACK_ENTRIES) return "too_many_pack_entries";
-
-      uint8_t packId = beginParsedPack(PACK_BASE, name, false);
-      if (packId == 0) return "too_many_packs";
-      legacyGroupIds[legacyGroupCount] = originalId;
-      legacyPackIds[legacyGroupCount] = packId;
-      ++legacyGroupCount;
-
-      for (JsonVariant item : entriesArray) {
-        if (!item.is<JsonObject>()) return "invalid_schedule";
-        if (parsedEntryCount >= MAX_ENTRIES) return "too_many_entries";
-        if (!parseScheduleEntry(item.as<JsonObject>(), packId,
-                                parsedEntries[parsedEntryCount])) {
-          return "invalid_schedule";
-        }
-        parsedEntries[parsedEntryCount].daysMask &= groupDays;
-        ++parsedEntryCount;
+      bool duplicate = false;
+      for (uint8_t i = 0; i < pack.dateCount; ++i) {
+        if (pack.dates[i] == key) duplicate = true;
       }
-    }
-  } else {
-    // Version 1: a flat list becomes one all-week base pack.
-    JsonVariant entriesValue = doc["entries"];
-    if (entriesValue.isNull() || !entriesValue.is<JsonArray>()) {
-      return "invalid_schedule";
-    }
-    JsonArray entriesArray = entriesValue.as<JsonArray>();
-    if (entriesArray.size() > MAX_PACK_ENTRIES) return "too_many_pack_entries";
-    uint8_t packId = beginParsedPack(PACK_BASE, String("Расписание"), false);
-    if (packId == 0) return "too_many_packs";
-    for (JsonVariant item : entriesArray) {
-      if (!item.is<JsonObject>()) return "invalid_schedule";
-      if (parsedEntryCount >= MAX_ENTRIES) return "too_many_entries";
-      if (!parseScheduleEntry(item.as<JsonObject>(), packId,
-                              parsedEntries[parsedEntryCount])) {
-        return "invalid_schedule";
-      }
-      ++parsedEntryCount;
+      if (!duplicate) pack.dates[pack.dateCount++] = key;
     }
   }
 
-  // Version 3 "add" overrides become date-limited base packs.
-  if (!overridesValue.isNull()) {
-    if (!overridesValue.is<JsonArray>()) return "invalid_schedule";
-    for (JsonVariant item : overridesValue.as<JsonArray>()) {
-      if (!item.is<JsonObject>()) return "invalid_schedule";
-      JsonObject obj = item.as<JsonObject>();
-      JsonVariant dateValue = obj["date"];
-      if (!dateValue.is<const char *>()) return "invalid_schedule";
-      uint32_t dateKey = 0;
-      if (!parseDateKey(String(dateValue.as<const char *>()), dateKey)) {
-        return "invalid_schedule";
-      }
-      JsonVariant modeValue = obj["mode"];
-      if (!modeValue.is<const char *>()) return "invalid_schedule";
-      String mode = String(modeValue.as<const char *>());
-      if (mode != "add") continue;
-      if (parsedPackCount >= MAX_PACKS) return "too_many_packs";
-      uint8_t packId = beginParsedPack(PACK_BASE, String(""), false);
-      if (packId == 0) return "too_many_packs";
-      parsedPacks[parsedPackCount - 1].dateCount = 1;
-      parsedPacks[parsedPackCount - 1].dates[0] = dateKey;
-      JsonVariant entriesValue = obj["entries"];
-      if (!entriesValue.isNull()) {
-        if (!entriesValue.is<JsonArray>()) return "invalid_schedule";
-        JsonArray entriesArray = entriesValue.as<JsonArray>();
-        if (entriesArray.size() > MAX_PACK_ENTRIES) return "too_many_pack_entries";
-        for (JsonVariant entry : entriesArray) {
-          if (!entry.is<JsonObject>()) return "invalid_schedule";
-          if (parsedEntryCount >= MAX_ENTRIES) return "too_many_entries";
-          if (!parseScheduleEntry(entry.as<JsonObject>(), packId,
-                                  parsedEntries[parsedEntryCount])) {
-            return "invalid_schedule";
-          }
-          parsedEntries[parsedEntryCount].daysMask = ALL_DAYS_MASK;
-          ++parsedEntryCount;
-        }
-      }
-    }
+  // Version 5 uses "modules"; version 4 used "entries".
+  JsonVariant modulesValue = packObj["modules"];
+  bool legacy = false;
+  if (modulesValue.isNull() && !packObj["entries"].isNull()) {
+    modulesValue = packObj["entries"];
+    legacy = true;
   }
+  if (!modulesValue.isNull() && !modulesValue.is<JsonArray>()) return "invalid_schedule";
+  size_t size = modulesValue.isNull() ? 0 : modulesValue.as<JsonArray>().size();
+  if (size > MAX_PACK_MODULES) return "too_many_pack_modules";
+  if (parsedModuleCount + size > MAX_MODULES) return "too_many_modules";
 
-  // Version 3 "mute"/"replace" overrides become corrections.
-  if (!overridesValue.isNull()) {
-    for (JsonVariant item : overridesValue.as<JsonArray>()) {
-      if (!item.is<JsonObject>()) return "invalid_schedule";
-      JsonObject obj = item.as<JsonObject>();
-      JsonVariant dateValue = obj["date"];
-      if (!dateValue.is<const char *>()) return "invalid_schedule";
-      uint32_t dateKey = 0;
-      if (!parseDateKey(String(dateValue.as<const char *>()), dateKey)) {
-        return "invalid_schedule";
-      }
-      JsonVariant modeValue = obj["mode"];
-      if (!modeValue.is<const char *>()) return "invalid_schedule";
-      String mode = String(modeValue.as<const char *>());
-      if (mode == "add") continue;
-      bool mute = mode == "mute";
-      if (!mute && mode != "replace") return "invalid_schedule";
-      if (parsedPackCount >= MAX_PACKS) return "too_many_packs";
-      uint8_t packId = beginParsedPack(PACK_CORRECTION, String(""), mute);
-      if (packId == 0) return "too_many_packs";
-      parsedPacks[parsedPackCount - 1].dateCount = 1;
-      parsedPacks[parsedPackCount - 1].dates[0] = dateKey;
-      if (mute) continue;
-      size_t beforeEntries = parsedEntryCount;
-      JsonVariant entriesValue = obj["entries"];
-      if (!entriesValue.isNull()) {
-        if (!entriesValue.is<JsonArray>()) return "invalid_schedule";
-        JsonArray entriesArray = entriesValue.as<JsonArray>();
-        if (entriesArray.size() > MAX_PACK_ENTRIES) return "too_many_pack_entries";
-        for (JsonVariant entry : entriesArray) {
-          if (!entry.is<JsonObject>()) return "invalid_schedule";
-          if (parsedEntryCount >= MAX_ENTRIES) return "too_many_entries";
-          if (!parseScheduleEntry(entry.as<JsonObject>(), packId,
-                                  parsedEntries[parsedEntryCount])) {
-            return "invalid_schedule";
-          }
-          parsedEntries[parsedEntryCount].daysMask = ALL_DAYS_MASK;
-          ++parsedEntryCount;
-        }
-      }
-      // A v3 replace with an empty list means "no bells", i.e. mute.
-      if (parsedEntryCount == beforeEntries) {
-        parsedPacks[parsedPackCount - 1].mute = true;
-      }
-    }
+  parsedPacks[parsedPackCount++] = pack;
+
+  if (modulesValue.isNull()) return nullptr;
+  for (JsonVariant item : modulesValue.as<JsonArray>()) {
+    if (!item.is<JsonObject>()) return "invalid_schedule";
+    ScheduleModule &target = parsedModules[parsedModuleCount];
+    bool ok = legacy ? parseLegacyEntry(item.as<JsonObject>(), packId, target)
+                     : parseModule(item.as<JsonObject>(), packId, target);
+    if (!ok) return "invalid_schedule";
+    ++parsedModuleCount;
   }
-
-  // Version 2 exceptions: mute or a copy of the referenced group.
-  if (!exceptionsValue.isNull()) {
-    if (!exceptionsValue.is<JsonArray>()) return "invalid_schedule";
-    for (JsonVariant item : exceptionsValue.as<JsonArray>()) {
-      if (!item.is<JsonObject>()) return "invalid_schedule";
-      JsonObject obj = item.as<JsonObject>();
-      JsonVariant dateValue = obj["date"];
-      if (!dateValue.is<const char *>()) return "invalid_schedule";
-      uint32_t dateKey = 0;
-      if (!parseDateKey(String(dateValue.as<const char *>()), dateKey)) {
-        return "invalid_schedule";
-      }
-
-      bool mute = false;
-      JsonVariant muteValue = obj["mute"];
-      if (!muteValue.isNull()) {
-        if (!muteValue.is<bool>()) return "invalid_schedule";
-        mute = muteValue.as<bool>();
-      }
-
-      uint8_t sourcePackId = 0;
-      JsonVariant groupIdValue = obj["group_id"];
-      if (!groupIdValue.isNull()) {
-        if (!groupIdValue.is<int>()) return "invalid_schedule";
-        int id = groupIdValue.as<int>();
-        if (id < 1 || id > 255) return "invalid_schedule";
-        sourcePackId = legacyPackIdForGroup(static_cast<uint8_t>(id), legacyGroupIds,
-                                            legacyPackIds, legacyGroupCount);
-        if (sourcePackId == 0) return "invalid_schedule";
-      }
-      if (!mute && sourcePackId == 0) return "invalid_schedule";
-
-      if (parsedPackCount >= MAX_PACKS) return "too_many_packs";
-      uint8_t packId = beginParsedPack(PACK_CORRECTION, String(""), mute);
-      if (packId == 0) return "too_many_packs";
-      parsedPacks[parsedPackCount - 1].dateCount = 1;
-      parsedPacks[parsedPackCount - 1].dates[0] = dateKey;
-
-      if (!mute) {
-        size_t sourceEntryCount = parsedEntryCount;
-        for (size_t i = 0; i < sourceEntryCount; ++i) {
-          if (parsedEntries[i].packId != sourcePackId) continue;
-          if (parsedEntryCount >= MAX_ENTRIES) return "too_many_entries";
-          parsedEntries[parsedEntryCount] = parsedEntries[i];
-          parsedEntries[parsedEntryCount].packId = packId;
-          // A date exception ignores weekdays in v2.
-          parsedEntries[parsedEntryCount].daysMask = ALL_DAYS_MASK;
-          ++parsedEntryCount;
-        }
-        // Copying an empty group means "no bells", i.e. mute.
-        if (parsedEntryCount == sourceEntryCount) {
-          parsedPacks[parsedPackCount - 1].mute = true;
-        }
-      }
-    }
-  }
-
   return nullptr;
 }
 
 // Parses a schedule document into the scratch buffers.
 // Returns nullptr on success, otherwise a stable error code string.
 const char *parseScheduleDocument(JsonDocument &doc) {
-  parsedEntryCount = 0;
+  parsedModuleCount = 0;
   parsedPackCount = 0;
   parsedAutoStart = 0;
   parsedAutoStop = 0;
 
   JsonVariant packsValue = doc["packs"];
-  if (!packsValue.isNull()) {
-    if (!packsValue.is<JsonArray>()) return "invalid_schedule";
-    JsonArray packsArray = packsValue.as<JsonArray>();
-    if (packsArray.size() > MAX_PACKS) return "too_many_packs";
-
-    for (JsonVariant packValue : packsArray) {
-      if (!packValue.is<JsonObject>()) return "invalid_schedule";
-      JsonObject packObj = packValue.as<JsonObject>();
-
-      uint8_t packId = static_cast<uint8_t>(parsedPackCount + 1);
-      JsonVariant idValue = packObj["id"];
-      if (!idValue.isNull()) {
-        if (!idValue.is<int>()) return "invalid_schedule";
-        int id = idValue.as<int>();
-        if (id < 1 || id > 255) return "invalid_schedule";
-        if (parsedPackExists(static_cast<uint8_t>(id))) return "invalid_schedule";
-        packId = static_cast<uint8_t>(id);
-      }
-
-      uint8_t kind = PACK_BASE;
-      JsonVariant kindValue = packObj["kind"];
-      if (!kindValue.isNull()) {
-        if (!parsePackKind(kindValue, kind)) return "invalid_schedule";
-      }
-
-      bool enabled = true;
-      JsonVariant enabledValue = packObj["enabled"];
-      if (!enabledValue.isNull()) {
-        if (!enabledValue.is<bool>()) return "invalid_schedule";
-        enabled = enabledValue.as<bool>();
-      }
-
-      bool yearly = false;
-      JsonVariant yearlyValue = packObj["yearly"];
-      if (!yearlyValue.isNull()) {
-        if (!yearlyValue.is<bool>()) return "invalid_schedule";
-        yearly = yearlyValue.as<bool>();
-      }
-
-      bool mute = false;
-      JsonVariant muteValue = packObj["mute"];
-      if (!muteValue.isNull()) {
-        if (!muteValue.is<bool>()) return "invalid_schedule";
-        mute = muteValue.as<bool>();
-      }
-      if (mute && kind != PACK_CORRECTION) return "invalid_schedule";
-
-      String name;
-      JsonVariant nameValue = packObj["name"];
-      if (!nameValue.isNull()) {
-        if (!nameValue.is<const char *>()) return "invalid_schedule";
-        name = truncateUtf8(String(nameValue.as<const char *>()), MAX_PACK_NAME_BYTES);
-      }
-
-      uint32_t fromKey = 0;
-      uint32_t toKey = 0;
-      JsonVariant fromValue = packObj["from"];
-      if (!fromValue.isNull()) {
-        if (!fromValue.is<const char *>()) return "invalid_schedule";
-        if (!parseDateKey(String(fromValue.as<const char *>()), fromKey)) {
-          return "invalid_schedule";
-        }
-      }
-      JsonVariant toValue = packObj["to"];
-      if (!toValue.isNull()) {
-        if (!toValue.is<const char *>()) return "invalid_schedule";
-        if (!parseDateKey(String(toValue.as<const char *>()), toKey)) {
-          return "invalid_schedule";
-        }
-      }
-      if (!yearly && fromKey != 0 && toKey != 0 && toKey < fromKey) {
-        return "invalid_schedule";
-      }
-
-      uint32_t dates[MAX_PACK_DATES];
-      uint8_t dateCount = 0;
-      JsonVariant datesValue = packObj["dates"];
-      if (!datesValue.isNull()) {
-        if (!datesValue.is<JsonArray>()) return "invalid_schedule";
-        JsonArray datesArray = datesValue.as<JsonArray>();
-        if (datesArray.size() > MAX_PACK_DATES) return "too_many_pack_dates";
-        for (JsonVariant dateValue : datesArray) {
-          if (!dateValue.is<const char *>()) return "invalid_schedule";
-          uint32_t key = 0;
-          if (!parseDateKey(String(dateValue.as<const char *>()), key)) {
-            return "invalid_schedule";
-          }
-          bool duplicate = false;
-          for (uint8_t i = 0; i < dateCount; ++i) {
-            if (dates[i] == key) duplicate = true;
-          }
-          if (!duplicate && dateCount < MAX_PACK_DATES) dates[dateCount++] = key;
-        }
-      }
-
-      JsonVariant entriesValue = packObj["entries"];
-      if (!entriesValue.isNull() && !entriesValue.is<JsonArray>()) {
-        return "invalid_schedule";
-      }
-      size_t entriesSize =
-          entriesValue.isNull() ? 0 : entriesValue.as<JsonArray>().size();
-      if (entriesSize > MAX_PACK_ENTRIES) return "too_many_pack_entries";
-      if (parsedEntryCount + entriesSize > MAX_ENTRIES) {
-        return "too_many_entries";
-      }
-
-      SchedulePack &pack = parsedPacks[parsedPackCount];
-      pack.id = packId;
-      pack.kind = kind;
-      pack.enabled = enabled;
-      pack.yearly = yearly;
-      pack.mute = mute;
-      pack.fromKey = fromKey;
-      pack.toKey = toKey;
-      pack.dateCount = dateCount;
-      for (uint8_t i = 0; i < dateCount; ++i) pack.dates[i] = dates[i];
-      pack.name = name;
-      ++parsedPackCount;
-
-      if (!entriesValue.isNull()) {
-        for (JsonVariant item : entriesValue.as<JsonArray>()) {
-          if (!item.is<JsonObject>()) return "invalid_schedule";
-          if (!parseScheduleEntry(item.as<JsonObject>(), packId,
-                                  parsedEntries[parsedEntryCount])) {
-            return "invalid_schedule";
-          }
-          ++parsedEntryCount;
-        }
-      }
-    }
-  } else {
-    const char *legacyError = parseLegacySchedule(doc);
-    if (legacyError != nullptr) return legacyError;
+  if (!packsValue.is<JsonArray>()) return "invalid_schedule";
+  JsonArray packsArray = packsValue.as<JsonArray>();
+  if (packsArray.size() > MAX_PACKS) return "too_many_packs";
+  for (JsonVariant packValue : packsArray) {
+    if (!packValue.is<JsonObject>()) return "invalid_schedule";
+    const char *error = parsePack(packValue.as<JsonObject>());
+    if (error != nullptr) return error;
   }
 
   JsonVariant autoValue = doc["auto"];
   if (!autoValue.isNull()) {
     if (!autoValue.is<JsonObject>()) return "invalid_schedule";
     JsonObject autoObj = autoValue.as<JsonObject>();
-    JsonVariant startValue = autoObj["start"];
-    if (!startValue.isNull()) {
-      if (!startValue.is<const char *>()) return "invalid_schedule";
-      if (!parseDateKey(String(startValue.as<const char *>()), parsedAutoStart)) {
-        return "invalid_schedule";
-      }
-    }
-    JsonVariant stopValue = autoObj["stop"];
-    if (!stopValue.isNull()) {
-      if (!stopValue.is<const char *>()) return "invalid_schedule";
-      if (!parseDateKey(String(stopValue.as<const char *>()), parsedAutoStop)) {
-        return "invalid_schedule";
-      }
-    }
+    if (!parseDateField(autoObj["start"], parsedAutoStart)) return "invalid_schedule";
+    if (!parseDateField(autoObj["stop"], parsedAutoStop)) return "invalid_schedule";
     if (parsedAutoStart != 0 && parsedAutoStop != 0 &&
         parsedAutoStop < parsedAutoStart) {
       return "invalid_schedule";
@@ -972,19 +811,21 @@ const char *parseScheduleDocument(JsonDocument &doc) {
 }
 
 void applyParsedSchedule() {
-  for (size_t i = 0; i < parsedEntryCount; ++i) entries[i] = parsedEntries[i];
-  entryCount = parsedEntryCount;
+  for (size_t i = 0; i < parsedModuleCount; ++i) modules[i] = parsedModules[i];
+  moduleCount = parsedModuleCount;
   for (size_t i = 0; i < parsedPackCount; ++i) packs[i] = parsedPacks[i];
   packCount = parsedPackCount;
   autoStartDate = parsedAutoStart;
   autoStopDate = parsedAutoStop;
+  ++scheduleRevision;
 }
 
 void loadScheduleFromFlash() {
-  entryCount = 0;
+  moduleCount = 0;
   packCount = 0;
   autoStartDate = 0;
   autoStopDate = 0;
+  ++scheduleRevision;
   if (!storageOk) return;
   File in = LittleFS.open(SCHEDULE_FILE, "r");
   if (!in) return;
@@ -1003,22 +844,27 @@ void writeDays(JsonObject &obj, uint8_t mask) {
   }
 }
 
-void appendEntry(JsonArray &arr, const ScheduleEntry &entry) {
+void appendModule(JsonArray &arr, const ScheduleModule &module) {
   JsonObject obj = arr.add<JsonObject>();
-  obj["time"] = formatTimeOfDay(entry.minuteOfDay);
-  if (entry.pairMinuteOfDay != 0xFFFF) {
-    obj["pair"] = formatTimeOfDay(entry.pairMinuteOfDay);
+  obj["type"] = moduleTypeName(module.type);
+  obj["time"] = formatTimeOfDay(module.start);
+  if (module.type == MODULE_LESSON) {
+    obj["length"] = module.length;
+    if (module.pre > 0) obj["pre"] = module.pre;
+  } else if (module.type == MODULE_SERIES) {
+    obj["until"] = formatTimeOfDay(module.until);
+    obj["every"] = module.every;
   }
-  writeDays(obj, entry.daysMask);
-  obj["label"] = entry.label;
+  writeDays(obj, module.daysMask);
+  obj["label"] = module.label;
 }
 
 void buildScheduleDocument(JsonDocument &doc, bool includeLimits) {
-  doc["version"] = 4;
+  doc["version"] = 5;
   if (includeLimits) {
-    doc["max_entries"] = static_cast<unsigned>(MAX_ENTRIES);
+    doc["max_modules"] = static_cast<unsigned>(MAX_MODULES);
     doc["max_packs"] = static_cast<unsigned>(MAX_PACKS);
-    doc["max_pack_entries"] = static_cast<unsigned>(MAX_PACK_ENTRIES);
+    doc["max_pack_modules"] = static_cast<unsigned>(MAX_PACK_MODULES);
     doc["max_pack_dates"] = static_cast<unsigned>(MAX_PACK_DATES);
   }
   if (autoStartDate != 0 || autoStopDate != 0) {
@@ -1045,9 +891,9 @@ void buildScheduleDocument(JsonDocument &doc, bool includeLimits) {
         datesArray.add(formatDateKey(pack.dates[d]));
       }
     }
-    JsonArray entriesArray = packObj["entries"].to<JsonArray>();
-    for (size_t i = 0; i < entryCount; ++i) {
-      if (entries[i].packId == pack.id) appendEntry(entriesArray, entries[i]);
+    JsonArray modulesArray = packObj["modules"].to<JsonArray>();
+    for (size_t i = 0; i < moduleCount; ++i) {
+      if (modules[i].packId == pack.id) appendModule(modulesArray, modules[i]);
     }
   }
 }
@@ -1185,17 +1031,15 @@ void handleRtcTimers() {
 
 // ------------------------------ Schedule ----------------------------------
 
-// Bells resolved for one date. The buffers are static so the recursion-free
-// evaluation never touches the stack.
-struct DayBell {
-  uint16_t minuteOfDay = 0;
-  uint16_t entryIndex = 0;
-};
+// One resolved day as a minute map. Every minute holds the index of the
+// module that owns its bell (or NO_SOURCE) and the bell's role. Bells that
+// share a minute ring once, so the first module to claim a minute owns it.
+const uint16_t NO_SOURCE = 0xFFFF;
+const uint8_t ROLE_FROM_CORRECTION = 0x80;
 
-DayBell dayBells[MAX_ENTRIES];
-size_t dayBellCount = 0;
-DayBell correctionBells[MAX_ENTRIES];
-size_t correctionBellCount = 0;
+uint16_t minuteSource[MINUTES_PER_DAY];
+uint8_t minuteRole[MINUTES_PER_DAY];
+uint16_t dayBellCount = 0;
 
 bool autoAllowsDate(uint32_t dateKey) {
   if (autoStartDate != 0 && dateKey < autoStartDate) return false;
@@ -1203,86 +1047,140 @@ bool autoAllowsDate(uint32_t dateKey) {
   return true;
 }
 
-void appendDayBell(DayBell *buffer, size_t &count, const ScheduleEntry &entry,
-                   size_t index) {
-  if (count >= MAX_ENTRIES) return;
-  buffer[count].minuteOfDay = entry.minuteOfDay;
-  buffer[count].entryIndex = static_cast<uint16_t>(index);
-  ++count;
+void markBell(int32_t minute, size_t moduleIndex, uint8_t role, bool correction) {
+  if (minute < 0 || minute >= MINUTES_PER_DAY) return;
+  if (minuteSource[minute] != NO_SOURCE) return;
+  minuteSource[minute] = static_cast<uint16_t>(moduleIndex);
+  minuteRole[minute] = static_cast<uint8_t>(role | (correction ? ROLE_FROM_CORRECTION : 0));
+  ++dayBellCount;
 }
 
-bool packHasEntryForDay(uint8_t packId, uint8_t weekdayMask) {
-  for (size_t i = 0; i < entryCount; ++i) {
-    if (entries[i].packId != packId) continue;
-    if (entries[i].daysMask & weekdayMask) return true;
+void expandModule(size_t index, bool correction) {
+  const ScheduleModule &module = modules[index];
+  switch (module.type) {
+    case MODULE_LESSON:
+      if (module.pre > 0) {
+        markBell(static_cast<int32_t>(module.start) - module.pre, index, ROLE_PRE, correction);
+      }
+      markBell(module.start, index, ROLE_START, correction);
+      markBell(static_cast<int32_t>(module.start) + module.length, index, ROLE_END,
+               correction);
+      break;
+    case MODULE_SERIES:
+      for (uint32_t minute = module.start; minute <= module.until; minute += module.every) {
+        markBell(static_cast<int32_t>(minute), index, ROLE_STEP, correction);
+      }
+      break;
+    default:
+      markBell(module.start, index, ROLE_BELL, correction);
+      break;
+  }
+}
+
+bool packHasModuleForDay(uint8_t packId, uint8_t weekdayMask) {
+  for (size_t i = 0; i < moduleCount; ++i) {
+    if (modules[i].packId == packId && (modules[i].daysMask & weekdayMask)) return true;
   }
   return false;
 }
 
-// Resolves a date exactly like BellSchedule.bellsFor() in the Android app.
-// Base packs add bells; a correction with bells for this weekday first clears
-// every base bell collected above it, then adds its own.
-void collectDayBells(uint32_t dateKey, uint8_t weekdayMask) {
+// Resolves a date exactly like BellSchedule.resolveDay() in the Android app.
+// Packs are walked top to bottom. A base pack adds bells; a correction that
+// applies (mute, or a module for this weekday) first drops every base bell
+// collected above it, then adds its own.
+void collectDayBells(uint32_t dateKey) {
+  for (uint16_t m = 0; m < MINUTES_PER_DAY; ++m) minuteSource[m] = NO_SOURCE;
   dayBellCount = 0;
-  correctionBellCount = 0;
   if (!autoAllowsDate(dateKey)) return;
+  uint8_t weekdayMask = weekdayMaskOf(dateKey);
 
   for (size_t p = 0; p < packCount; ++p) {
     const SchedulePack &pack = packs[p];
     if (!pack.enabled || !packAllowsDate(pack, dateKey)) continue;
-
-    if (pack.kind == PACK_BASE) {
-      for (size_t i = 0; i < entryCount; ++i) {
-        const ScheduleEntry &entry = entries[i];
-        if (entry.packId != pack.id) continue;
-        if ((entry.daysMask & weekdayMask) == 0) continue;
-        appendDayBell(dayBells, dayBellCount, entry, i);
+    bool correction = pack.kind == PACK_CORRECTION;
+    if (correction) {
+      if (!pack.mute && !packHasModuleForDay(pack.id, weekdayMask)) continue;
+      for (uint16_t m = 0; m < MINUTES_PER_DAY; ++m) {
+        if (minuteSource[m] == NO_SOURCE) continue;
+        if (minuteRole[m] & ROLE_FROM_CORRECTION) continue;
+        minuteSource[m] = NO_SOURCE;
+        --dayBellCount;
       }
-      continue;
+      if (pack.mute) continue;
     }
-
-    bool applies = pack.mute || packHasEntryForDay(pack.id, weekdayMask);
-    if (!applies) continue;
-    dayBellCount = 0;
-    if (pack.mute) continue;
-    for (size_t i = 0; i < entryCount; ++i) {
-      const ScheduleEntry &entry = entries[i];
-      if (entry.packId != pack.id) continue;
-      if ((entry.daysMask & weekdayMask) == 0) continue;
-      appendDayBell(correctionBells, correctionBellCount, entry, i);
+    for (size_t i = 0; i < moduleCount; ++i) {
+      if (modules[i].packId != pack.id) continue;
+      if ((modules[i].daysMask & weekdayMask) == 0) continue;
+      expandModule(i, correction);
     }
   }
+}
 
-  for (size_t i = 0; i < correctionBellCount && dayBellCount < MAX_ENTRIES; ++i) {
-    dayBells[dayBellCount++] = correctionBells[i];
+// The next bell after the current minute, cached per minute and schedule
+// revision because GET /status is polled every couple of seconds.
+struct NextBell {
+  bool valid = false;
+  uint32_t dateKey = 0;
+  uint16_t minute = 0;
+  uint16_t moduleIndex = 0;
+  uint8_t role = ROLE_BELL;
+};
+
+NextBell nextBell;
+uint16_t todayBellCount = 0;
+uint32_t nextBellMinuteKey = 0xFFFFFFFFUL;
+uint32_t nextBellRevision = 0xFFFFFFFFUL;
+
+void refreshNextBell() {
+  if (!timeIsValid()) {
+    nextBell.valid = false;
+    todayBellCount = 0;
+    nextBellMinuteKey = 0xFFFFFFFFUL;
+    return;
+  }
+  uint32_t key = minuteKey(cachedNow);
+  if (key == nextBellMinuteKey && scheduleRevision == nextBellRevision) return;
+  nextBellMinuteKey = key;
+  nextBellRevision = scheduleRevision;
+  nextBell.valid = false;
+
+  uint32_t dateKey = dateKeyOf(cachedNow);
+  uint16_t nowMinute = static_cast<uint16_t>(cachedNow.hour() * 60 + cachedNow.minute());
+  for (uint8_t day = 0; day < NEXT_BELL_HORIZON_DAYS; ++day) {
+    collectDayBells(dateKey);
+    if (day == 0) todayBellCount = dayBellCount;
+    uint16_t from = day == 0 ? nowMinute + 1 : 0;
+    for (uint16_t m = from; m < MINUTES_PER_DAY; ++m) {
+      if (minuteSource[m] == NO_SOURCE) continue;
+      nextBell.valid = true;
+      nextBell.dateKey = dateKey;
+      nextBell.minute = m;
+      nextBell.moduleIndex = minuteSource[m];
+      nextBell.role = minuteRole[m] & ~ROLE_FROM_CORRECTION;
+      return;
+    }
+    dateKey = addDaysToDateKey(dateKey, 1);
   }
 }
 
 void checkSchedule() {
-  if (!timeIsValid() || currentMode != "auto" || ringing) return;
-  if (cachedNow.second() != 0) return;
+  if (!timeIsValid() || currentMode != "auto") return;
+  if (cachedNow.second() >= RING_GRACE_SEC) return;
 
   uint32_t key = minuteKey(cachedNow);
   if (key == lastScheduleMinute) return;
   lastScheduleMinute = key;
   if (suppressMinuteSet && key == suppressMinuteKey) return;
 
-  uint32_t today = dateKeyOf(cachedNow);
-  uint8_t todayMask = static_cast<uint8_t>(1U << (isoWeekday(cachedNow) - 1));
-  collectDayBells(today, todayMask);
-
+  collectDayBells(dateKeyOf(cachedNow));
   uint16_t minuteOfDay =
       static_cast<uint16_t>(cachedNow.hour() * 60 + cachedNow.minute());
-  bool shouldRing = false;
-  for (size_t i = 0; i < dayBellCount; ++i) {
-    if (dayBells[i].minuteOfDay == minuteOfDay) {
-      shouldRing = true;
-      break;
-    }
-  }
+  if (minuteSource[minuteOfDay] == NO_SOURCE) return;
 
-  // Ring duration comes from the settings, not from individual entries.
-  if (shouldRing) startRing(ringDefault);
+  // The ring duration is a device setting. A manual ring that is already
+  // sounding is extended rather than cut short.
+  if (ringing && ringLeftSec >= ringDefault) return;
+  startRing(ringDefault);
 }
 
 // -------------------------------- LED -------------------------------------
@@ -1370,13 +1268,17 @@ void sendJson(int code, const String &payload) {
   server.send(code, "application/json; charset=utf-8", payload);
 }
 
+void sendDocument(int code, JsonDocument &doc) {
+  String payload;
+  serializeJson(doc, payload);
+  sendJson(code, payload);
+}
+
 void sendError(int code, const char *errorCode) {
   JsonDocument doc;
   doc["ok"] = false;
   doc["error"] = errorCode;
-  String payload;
-  serializeJson(doc, payload);
-  sendJson(code, payload);
+  sendDocument(code, doc);
 }
 
 bool tokenAccepted() {
@@ -1402,7 +1304,7 @@ bool readJsonBody(JsonDocument &doc, const char *&errorCode) {
   // Reject oversized documents before ArduinoJson allocates anything, and keep
   // the nesting shallow so a hostile body cannot exhaust the heap.
   if (server.arg("plain").length() > MAX_SCHEDULE_BODY_BYTES) {
-    errorCode = "too_many_entries";
+    errorCode = "too_many_modules";
     return false;
   }
   DeserializationError err = deserializeJson(
@@ -1416,7 +1318,19 @@ bool readJsonBody(JsonDocument &doc, const char *&errorCode) {
 
 void handleOptions() { server.send(204, "text/plain", ""); }
 
-void sendStatus() {
+// Describes one resolved bell: its time, label and what it means.
+void writeBell(JsonObject obj, uint16_t minute, uint16_t moduleIndex, uint8_t role) {
+  const ScheduleModule &module = modules[moduleIndex];
+  obj["time"] = formatTimeOfDay(minute);
+  obj["label"] = module.label;
+  obj["type"] = moduleTypeName(module.type);
+  obj["role"] = bellRoleName(role);
+}
+
+void handleGetStatus() {
+  if (!requireToken()) return;
+  refreshNextBell();
+
   JsonDocument doc;
   if (timeIsValid()) {
     doc["time"] = formatDateTime(cachedNow);
@@ -1428,8 +1342,23 @@ void sendStatus() {
   doc["ringing"] = ringing;
   doc["ring_left"] = ringing ? ringLeftSec : 0;
   doc["ring_default"] = ringDefault;
-  doc["entries"] = static_cast<unsigned>(entryCount);
+  doc["modules"] = static_cast<unsigned>(moduleCount);
   doc["packs"] = static_cast<unsigned>(packCount);
+  if (lastSync.length() > 0) {
+    doc["synced"] = lastSync;
+  } else {
+    doc["synced"] = nullptr;
+  }
+  if (timeIsValid()) {
+    doc["today_bells"] = todayBellCount;
+  }
+  if (nextBell.valid) {
+    JsonObject next = doc["next"].to<JsonObject>();
+    next["date"] = formatDateKey(nextBell.dateKey);
+    writeBell(next, nextBell.minute, nextBell.moduleIndex, nextBell.role);
+  } else {
+    doc["next"] = nullptr;
+  }
   if (autoStartDate != 0 || autoStopDate != 0) {
     JsonObject autoObj = doc["auto"].to<JsonObject>();
     if (autoStartDate != 0) autoObj["start"] = formatDateKey(autoStartDate);
@@ -1442,77 +1371,43 @@ void sendStatus() {
   if (!apOk) errors.add("wifi_ap_error");
   doc["fw"] = FW_VERSION;
   doc["api"] = API_VERSION;
-  String payload;
-  serializeJson(doc, payload);
-  sendJson(200, payload);
+  sendDocument(200, doc);
 }
 
-void handleGetStatus() {
-  if (!requireToken()) return;
-  sendStatus();
+bool parseRingSeconds(int &seconds) {
+  if (server.hasArg("sec")) {
+    String raw = server.arg("sec");
+    raw.trim();
+    if (raw.length() == 0 || raw.length() > 3) return false;
+    for (size_t i = 0; i < raw.length(); ++i) {
+      if (raw[i] < '0' || raw[i] > '9') return false;
+    }
+    seconds = static_cast<int>(raw.toInt());
+  }
+  if (server.hasArg("plain") && server.arg("plain").length() > 0) {
+    JsonDocument doc;
+    if (deserializeJson(doc, server.arg("plain"))) return false;
+    if (!parseIntField(doc["sec"], MIN_RING_SEC, MAX_RING_SEC, seconds, seconds)) {
+      return false;
+    }
+  }
+  return seconds >= MIN_RING_SEC && seconds <= MAX_RING_SEC;
 }
 
 void handlePostRing() {
   if (!requireToken()) return;
-
   int seconds = ringDefault;
-  bool haveSeconds = false;
-
-  if (server.hasArg("sec")) {
-    String raw = server.arg("sec");
-    raw.trim();
-    if (raw.length() == 0) {
-      sendError(400, "invalid_sec");
-      return;
-    }
-    for (size_t i = 0; i < raw.length(); ++i) {
-      if (raw[i] < '0' || raw[i] > '9') {
-        sendError(400, "invalid_sec");
-        return;
-      }
-    }
-    long value = raw.toInt();
-    if (value < MIN_RING_SEC || value > MAX_RING_SEC) {
-      sendError(400, "invalid_sec");
-      return;
-    }
-    seconds = static_cast<int>(value);
-    haveSeconds = true;
+  if (!parseRingSeconds(seconds)) {
+    sendError(400, "invalid_sec");
+    return;
   }
-
-  if (server.hasArg("plain") && server.arg("plain").length() > 0) {
-    JsonDocument doc;
-    DeserializationError err = deserializeJson(doc, server.arg("plain"));
-    if (err) {
-      sendError(400, "invalid_json");
-      return;
-    }
-    JsonVariant secValue = doc["sec"];
-    if (!secValue.isNull()) {
-      if (!secValue.is<int>()) {
-        sendError(400, "invalid_sec");
-        return;
-      }
-      int value = secValue.as<int>();
-      if (value < MIN_RING_SEC || value > MAX_RING_SEC) {
-        sendError(400, "invalid_sec");
-        return;
-      }
-      seconds = value;
-      haveSeconds = true;
-    }
-  }
-
-  if (!haveSeconds && seconds < MIN_RING_SEC) seconds = DEFAULT_RING_SEC;
   startRing(static_cast<uint16_t>(seconds));
 
   JsonDocument doc;
   doc["ok"] = true;
   doc["ringing"] = true;
   doc["ring_left"] = ringLeftSec;
-  String payload;
-  serializeJson(doc, payload);
-  sendJson(200, payload);
+  sendDocument(200, doc);
 }
 
 void handlePostStop() {
@@ -1521,18 +1416,14 @@ void handlePostStop() {
   JsonDocument doc;
   doc["ok"] = true;
   doc["ringing"] = false;
-  String payload;
-  serializeJson(doc, payload);
-  sendJson(200, payload);
+  sendDocument(200, doc);
 }
 
 void handleGetMode() {
   if (!requireToken()) return;
   JsonDocument doc;
   doc["mode"] = currentMode;
-  String payload;
-  serializeJson(doc, payload);
-  sendJson(200, payload);
+  sendDocument(200, doc);
 }
 
 void handlePostMode() {
@@ -1565,9 +1456,7 @@ void handlePostMode() {
   JsonDocument out;
   out["ok"] = true;
   out["mode"] = currentMode;
-  String payload;
-  serializeJson(out, payload);
-  sendJson(200, payload);
+  sendDocument(200, out);
 }
 
 void handlePostTime() {
@@ -1600,76 +1489,47 @@ void handlePostTime() {
   suppressMinuteKey = minuteKey(requested);
   lastScheduleMinute = suppressMinuteKey;
   suppressMinuteSet = true;
+  nextBellMinuteKey = 0xFFFFFFFFUL;
+
+  // Remembering the sync time is a convenience; the clock is already set even
+  // when the flash write fails.
+  lastSync = formatDateTime(requested);
+  saveSettingsToFlash();
 
   JsonDocument out;
   out["ok"] = true;
-  out["time"] = formatDateTime(requested);
-  String payload;
-  serializeJson(out, payload);
-  sendJson(200, payload);
+  out["time"] = lastSync;
+  sendDocument(200, out);
 }
 
 void handleGetSchedule() {
   if (!requireToken()) return;
   JsonDocument doc;
   buildScheduleDocument(doc, true);
-  String payload;
-  serializeJson(doc, payload);
-  sendJson(200, payload);
+  sendDocument(200, doc);
 }
 
 // Resolved bell list for one date, useful for checking that the app's preview
 // and the device agree.
 void handleGetScheduleDay() {
   if (!requireToken()) return;
-  if (!server.hasArg("date")) {
-    sendError(400, "invalid_date");
-    return;
-  }
   uint32_t dateKey = 0;
-  if (!parseDateKey(server.arg("date"), dateKey)) {
+  if (!server.hasArg("date") || !parseDateKey(server.arg("date"), dateKey)) {
     sendError(400, "invalid_date");
     return;
   }
-
-  uint8_t weekdayMask =
-      static_cast<uint8_t>(1U << (isoWeekdayFromDateKey(dateKey) - 1));
-  collectDayBells(dateKey, weekdayMask);
-
-  // Merge bells that share a minute and sort by time into a small scratch
-  // buffer. Duration comes from the settings, so the first bell wins.
-  static DayBell merged[MAX_ENTRIES];
-  size_t mergedCount = 0;
-  bool taken[MAX_ENTRIES];
-  for (size_t i = 0; i < dayBellCount; ++i) taken[i] = false;
-  for (size_t i = 0; i < dayBellCount; ++i) {
-    if (taken[i]) continue;
-    DayBell value = dayBells[i];
-    for (size_t j = i + 1; j < dayBellCount; ++j) {
-      if (dayBells[j].minuteOfDay != value.minuteOfDay) continue;
-      taken[j] = true;
-    }
-    size_t position = mergedCount;
-    while (position > 0 && merged[position - 1].minuteOfDay > value.minuteOfDay) {
-      merged[position] = merged[position - 1];
-      --position;
-    }
-    merged[position] = value;
-    ++mergedCount;
-  }
+  collectDayBells(dateKey);
 
   JsonDocument doc;
   doc["date"] = formatDateKey(dateKey);
   JsonArray bells = doc["bells"].to<JsonArray>();
-  for (size_t i = 0; i < mergedCount; ++i) {
+  for (uint16_t m = 0; m < MINUTES_PER_DAY; ++m) {
+    if (minuteSource[m] == NO_SOURCE) continue;
     JsonObject obj = bells.add<JsonObject>();
-    obj["time"] = formatTimeOfDay(merged[i].minuteOfDay);
-    obj["duration"] = ringDefault;
-    obj["label"] = entries[merged[i].entryIndex].label;
+    writeBell(obj, m, minuteSource[m], minuteRole[m] & ~ROLE_FROM_CORRECTION);
+    obj["pack"] = modules[minuteSource[m]].packId;
   }
-  String payload;
-  serializeJson(doc, payload);
-  sendJson(200, payload);
+  sendDocument(200, doc);
 }
 
 void handlePostSchedule() {
@@ -1700,20 +1560,16 @@ void handlePostSchedule() {
 
   JsonDocument out;
   out["ok"] = true;
-  out["entries"] = static_cast<unsigned>(entryCount);
+  out["modules"] = static_cast<unsigned>(moduleCount);
   out["packs"] = static_cast<unsigned>(packCount);
-  String payload;
-  serializeJson(out, payload);
-  sendJson(200, payload);
+  sendDocument(200, out);
 }
 
 void handleGetSettings() {
   if (!requireToken()) return;
   JsonDocument doc;
   doc["ring_default"] = ringDefault;
-  String payload;
-  serializeJson(doc, payload);
-  sendJson(200, payload);
+  sendDocument(200, doc);
 }
 
 void handlePostSettings() {
@@ -1724,13 +1580,9 @@ void handlePostSettings() {
     sendError(400, errorCode);
     return;
   }
-  JsonVariant value = doc["ring_default"];
-  if (!value.is<int>()) {
-    sendError(400, "invalid_ring_default");
-    return;
-  }
-  int newDefault = value.as<int>();
-  if (newDefault < MIN_RING_SEC || newDefault > MAX_RING_SEC) {
+  int newDefault = 0;
+  if (doc["ring_default"].isNull() ||
+      !parseIntField(doc["ring_default"], MIN_RING_SEC, MAX_RING_SEC, 0, newDefault)) {
     sendError(400, "invalid_ring_default");
     return;
   }
@@ -1746,9 +1598,7 @@ void handlePostSettings() {
   JsonDocument out;
   out["ok"] = true;
   out["ring_default"] = ringDefault;
-  String payload;
-  serializeJson(out, payload);
-  sendJson(200, payload);
+  sendDocument(200, out);
 }
 
 void handleRoot() {
@@ -1761,28 +1611,39 @@ void handleRoot() {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>BellTimer</title>
 <style>
-body{font-family:system-ui,sans-serif;margin:16px;background:#111;color:#eee}
-button{font-size:1rem;padding:8px 14px;margin:4px;border-radius:8px;border:0;background:#3b82f6;color:#fff}
-pre{background:#222;padding:10px;border-radius:8px;white-space:pre-wrap}
-input{width:80px;padding:6px;margin:4px;border-radius:6px;border:1px solid #555;background:#222;color:#eee}
+:root{--bg:#14120f;--card:#1f1c17;--ink:#f3ede2;--mute:#a59d8f;--acc:#e8a33d;--bad:#e5645a}
+*{box-sizing:border-box}body{font-family:system-ui,sans-serif;margin:0;padding:16px;background:var(--bg);color:var(--ink);max-width:480px;margin:auto}
+h1{font-size:1.1rem;color:var(--mute);font-weight:500;margin:4px 0 12px}
+.card{background:var(--card);border-radius:16px;padding:16px;margin-bottom:12px}
+.clock{font-size:3rem;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-1px}
+.mute{color:var(--mute);font-size:.9rem}.bad{color:var(--bad)}
+button{font:inherit;padding:12px 16px;margin:4px 4px 0 0;border-radius:12px;border:0;background:#2c2820;color:var(--ink)}
+button.acc{background:var(--acc);color:#1b1408;font-weight:600}
+input{font:inherit;width:72px;padding:10px;border-radius:10px;border:1px solid #3a352c;background:#16140f;color:var(--ink)}
 </style></head><body>
 <h1>BellTimer</h1>
-<p><b>Статус:</b></p><pre id="status">...</pre>
-<p><input id="sec" type="number" min="1" max="60" value="5">
-<button onclick="ring()">Звонок</button>
-<button onclick="stop()">Стоп</button></p>
-<p><button onclick="setMode('auto')">AUTO</button>
-<button onclick="setMode('manual')">MANUAL</button></p>
-<p><input id="token" placeholder="X-Token" size="16">
-<button onclick="refresh()">Обновить</button></p>
+<div class="card"><div class="clock" id="clock">--:--:--</div>
+<div class="mute" id="info">…</div><div class="bad" id="err"></div>
+<button class="acc" onclick="sync()">Синхронизировать с этим устройством</button></div>
+<div class="card"><div class="mute">Следующий звонок</div><div id="next" style="font-size:1.4rem;margin-top:4px">—</div></div>
+<div class="card"><input id="sec" type="number" min="1" max="60" value="5"> с
+<button class="acc" onclick="ring()">Звонок</button><button onclick="post('/stop')">Стоп</button><br>
+<button onclick="post('/mode',{mode:'auto'})">Авто</button><button onclick="post('/mode',{mode:'manual'})">Вручную</button></div>
+<div class="card"><input id="token" placeholder="X-Token" style="width:100%"></div>
 <script>
-function headers(){const t=document.getElementById('token').value;return t?{'X-Token':t}:{}}
-async function call(path,opts){const r=await fetch(path,Object.assign({headers:headers()},opts||{}));document.getElementById('status').textContent=await r.text();}
-function refresh(){call('/status');}
-function ring(){call('/ring',{method:'POST',headers:Object.assign({'Content-Type':'application/json'},headers()),body:JSON.stringify({sec:+document.getElementById('sec').value})});}
-function stop(){call('/stop',{method:'POST'});}
-function setMode(m){call('/mode',{method:'POST',headers:Object.assign({'Content-Type':'application/json'},headers()),body:JSON.stringify({mode:m})});}
-refresh();
+const $=id=>document.getElementById(id);
+function hdr(){const t=$('token').value;const h={'Content-Type':'application/json'};if(t)h['X-Token']=t;return h}
+async function post(p,b){await fetch(p,{method:'POST',headers:hdr(),body:b?JSON.stringify(b):''});refresh()}
+function ring(){post('/ring',{sec:+$('sec').value})}
+function pad(n){return String(n).padStart(2,'0')}
+function sync(){const d=new Date();post('/time',{datetime:d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds())})}
+async function refresh(){try{const r=await fetch('/status',{headers:hdr()});const s=await r.json();
+$('clock').textContent=s.time?s.time.slice(11):'--:--:--';
+$('info').textContent=(s.mode==='auto'?'Авто':'Вручную')+' · модулей '+s.modules+(s.ringing?' · звонит '+s.ring_left+' с':'')+' · fw '+s.fw;
+$('err').textContent=(s.errors||[]).join(', ');
+$('next').textContent=s.next?(s.next.date.slice(5)+' '+s.next.time+' '+(s.next.label||'')):'—';
+}catch(e){$('err').textContent='нет связи'}}
+refresh();setInterval(refresh,2000);
 </script></body></html>)HTML";
   server.send_P(200, "text/html; charset=utf-8", PAGE);
 }
