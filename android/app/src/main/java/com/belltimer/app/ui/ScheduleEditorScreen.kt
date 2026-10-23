@@ -1,7 +1,6 @@
 package com.belltimer.app.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +18,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -28,11 +28,16 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.InputChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -55,106 +60,69 @@ import com.belltimer.app.R
 import com.belltimer.app.UiState
 import com.belltimer.app.data.ALL_DAYS
 import com.belltimer.app.data.BellEntry
-import com.belltimer.app.data.BuilderApplyMode
 import com.belltimer.app.data.MAX_LABEL_BYTES
-import com.belltimer.app.data.ScheduleGroup
+import com.belltimer.app.data.MAX_PACK_ENTRIES
+import com.belltimer.app.data.PackKind
+import com.belltimer.app.data.SchedulePack
 import com.belltimer.app.data.WEEKDAYS
-import com.belltimer.app.data.WeekdayConflict
-import com.belltimer.app.data.canAddEntries
-import com.belltimer.app.data.firstFreeDays
-import com.belltimer.app.data.firstOverlap
-import com.belltimer.app.data.inheritDays
+import com.belltimer.app.data.canAddDate
+import com.belltimer.app.data.canAddEntry
+import com.belltimer.app.data.canAddPack
 import com.belltimer.app.data.labelTooLong
+import com.belltimer.app.data.packNameTooLong
 import com.belltimer.app.data.shiftBy
-import com.belltimer.app.data.sortedSchedule
-
-private data class EntryTarget(val index: Int?)
+import java.time.LocalDate
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ScheduleEditorScreen(
     state: UiState,
     viewModel: AppViewModel,
-    groupId: Int,
-    startWithBuilder: Boolean,
-    onStartWithBuilderConsumed: () -> Unit,
+    packId: Int,
     onBack: () -> Unit,
 ) {
     val schedule = state.schedule
-    val group = schedule.groupById(groupId)
+    val pack = schedule.packById(packId)
 
-    if (group == null) {
-        LaunchedEffect(groupId) { onBack() }
+    if (pack == null) {
+        LaunchedEffect(packId) { onBack() }
         return
     }
 
-    var entryTarget by remember { mutableStateOf<EntryTarget?>(null) }
+    var addingEntry by remember { mutableStateOf(false) }
+    var entryIndex by remember { mutableStateOf<Int?>(null) }
     var menuOpen by remember { mutableStateOf(false) }
-    var builderChoice by remember { mutableStateOf(false) }
-    var builderMode by remember { mutableStateOf(BuilderApplyMode.Replace) }
-    var showBuilder by rememberSaveable { mutableStateOf(false) }
+    var showBuilder by remember { mutableStateOf(false) }
     var shiftSheet by remember { mutableStateOf(false) }
-    var dayConflict by remember { mutableStateOf<List<WeekdayConflict>>(emptyList()) }
-    var pendingDays by remember { mutableStateOf<Set<Int>?>(null) }
+    var clearConfirm by remember { mutableStateOf(false) }
+    var editFrom by remember { mutableStateOf(false) }
+    var editTo by remember { mutableStateOf(false) }
+    var addDate by remember { mutableStateOf(false) }
 
     val entryDeletedMessage = stringResource(R.string.schedule_entry_deleted)
-    val overlapMessage = stringResource(R.string.schedule_overlap_error)
-    val noDaysMessage = stringResource(R.string.schedule_without_days)
-    val copySuffix = stringResource(R.string.schedule_copy_suffix)
+    val clearedMessage = stringResource(R.string.schedule_pack_cleared)
     val shiftOverflowMessage = stringResource(R.string.schedule_shift_overflow)
+    val copySuffix = stringResource(R.string.schedule_copy_suffix)
+    val tooManyPacksMessage = stringResource(R.string.error_too_many_packs)
 
     BackHandler { onBack() }
 
-    LaunchedEffect(startWithBuilder) {
-        if (startWithBuilder) {
-            builderMode = BuilderApplyMode.Replace
-            showBuilder = true
-            onStartWithBuilderConsumed()
-        }
+    fun commit(updated: SchedulePack, undoable: Boolean = false) {
+        val current = viewModel.state.value.schedule
+        viewModel.updateSchedule(current.withPack(updated), undoable = undoable)
     }
 
-    fun commitDays(target: Set<Int>) {
-        val updated = schedule.groups.fold(schedule) { acc, item ->
-            when {
-                item.id == group.id -> acc.withGroup(item.withDays(target))
-                else -> {
-                    val remaining = item.days - target
-                    if (remaining == item.days) acc else acc.withGroup(item.withDays(remaining))
-                }
-            }
-        }
-        viewModel.updateSchedule(updated)
-    }
+    fun currentPack(): SchedulePack? = viewModel.state.value.schedule.packById(packId)
 
-    fun requestDays(target: Set<Int>) {
-        val conflicts = schedule.conflictingDays(target - group.days, group.id)
-        if (conflicts.isEmpty()) {
-            commitDays(target)
-        } else {
-            pendingDays = target
-            dayConflict = conflicts
-        }
-    }
+    val newEntryDays = pack.weekdayUnion.ifEmpty { WEEKDAYS }
 
     if (showBuilder) {
         ScheduleBuilderScreen(
-            defaultDuration = state.ringSeconds,
-            existingEntries = if (builderMode == BuilderApplyMode.Append) group.entries.size else 0,
+            existingEntries = 0,
+            days = newEntryDays,
             onDismiss = { showBuilder = false },
             onApply = { entries ->
-                val current = viewModel.state.value.schedule.groupById(groupId)
-                if (current != null) {
-                    val merged = when (builderMode) {
-                        BuilderApplyMode.Replace -> entries
-                        BuilderApplyMode.Append -> current.entries + entries
-                    }
-                    viewModel.updateSchedule(
-                        viewModel.state.value.schedule.withGroup(
-                            current.withEntries(merged.inheritDays(current.days).sortedSchedule()),
-                        ),
-                        undoable = true,
-                    )
-                }
+                currentPack()?.let { commit(it.withEntries(entries), undoable = true) }
                 showBuilder = false
             },
         )
@@ -166,14 +134,12 @@ fun ScheduleEditorScreen(
             TopAppBar(
                 title = {
                     BasicTextField(
-                        value = group.name,
+                        value = pack.name,
                         onValueChange = { newName ->
-                            viewModel.updateSchedule(
-                                viewModel.state.value.schedule.withGroup(
-                                    (viewModel.state.value.schedule.groupById(groupId) ?: group)
-                                        .copy(name = newName),
-                                ),
-                            )
+                            val current = currentPack()
+                            if (current != null && !packNameTooLong(newName)) {
+                                commit(current.copy(name = newName))
+                            }
                         },
                         singleLine = true,
                         textStyle = MaterialTheme.typography.titleLarge.copy(
@@ -207,13 +173,18 @@ fun ScheduleEditorScreen(
                                 text = { Text(stringResource(R.string.schedule_duplicate)) },
                                 onClick = {
                                     menuOpen = false
-                                    val clone = group
-                                        .withDays(schedule.firstFreeDays())
-                                        .copy(
-                                            id = schedule.nextGroupId(),
-                                            name = group.name + " " + copySuffix,
-                                        )
-                                    viewModel.updateSchedule(schedule.withGroup(clone))
+                                    val current = currentPack()
+                                    if (current != null) {
+                                        if (!schedule.canAddPack()) {
+                                            viewModel.reportMessage(tooManyPacksMessage)
+                                        } else {
+                                            val clone = current.copy(
+                                                id = schedule.nextPackId(),
+                                                name = current.name + " " + copySuffix,
+                                            )
+                                            viewModel.updateSchedule(schedule.withPack(clone))
+                                        }
+                                    }
                                 },
                             )
                             DropdownMenuItem(
@@ -221,7 +192,7 @@ fun ScheduleEditorScreen(
                                 onClick = {
                                     menuOpen = false
                                     viewModel.updateSchedule(
-                                        schedule.withoutGroup(group.id),
+                                        schedule.withoutPack(pack.id),
                                         undoable = true,
                                     )
                                     onBack()
@@ -239,91 +210,252 @@ fun ScheduleEditorScreen(
                 .padding(padding)
                 .padding(horizontal = 16.dp),
         ) {
-            item(key = "weekdays") {
-                SectionHeader(text = stringResource(R.string.schedule_weekdays_title))
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
+            item(key = "status") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    for (day in 1..7) {
-                        FilterChip(
-                            selected = day in group.days,
-                            onClick = {
-                                val target = if (day in group.days) {
-                                    group.days - day
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = stringResource(R.string.schedule_pack_enabled),
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                        val active = pack.appliesOn(LocalDate.now())
+                        Text(
+                            text = stringResource(
+                                if (active) {
+                                    R.string.schedule_pack_status_active
                                 } else {
-                                    group.days + day
-                                }
-                                requestDays(target)
+                                    R.string.schedule_pack_status_inactive
+                                },
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (active) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
                             },
-                            label = { Text(weekdayName(day)) },
                         )
                     }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    AssistChip(
-                        onClick = { requestDays(WEEKDAYS) },
-                        label = { Text(stringResource(R.string.days_weekdays)) },
-                    )
-                    AssistChip(
-                        onClick = { requestDays(ALL_DAYS) },
-                        label = { Text(stringResource(R.string.days_every_day)) },
-                    )
-                }
-                if (group.days.isEmpty()) {
-                    Text(
-                        text = noDaysMessage,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                } else if (schedule.firstOverlap()?.let { it.groupId == group.id || it.otherGroupId == group.id } == true) {
-                    Text(
-                        text = overlapMessage,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
+                    Switch(
+                        checked = pack.enabled,
+                        onCheckedChange = { enabled ->
+                            currentPack()?.let { commit(it.copy(enabled = enabled)) }
+                        },
                     )
                 }
             }
 
-            item(key = "bells-header") {
-                SectionHeader(
-                    text = stringResource(R.string.schedule_bells_title) + " · " +
-                        stringResource(R.string.schedule_bells_count, group.entries.size),
+            item(key = "kind") {
+                SectionHeader(text = stringResource(R.string.schedule_pack_type_title))
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    SegmentedButton(
+                        selected = pack.kind == PackKind.Base,
+                        onClick = {
+                            currentPack()?.let {
+                                commit(it.copy(kind = PackKind.Base, mute = false))
+                            }
+                        },
+                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                    ) {
+                        Text(stringResource(R.string.schedule_pack_kind_base))
+                    }
+                    SegmentedButton(
+                        selected = pack.kind == PackKind.Correction,
+                        onClick = {
+                            currentPack()?.let { commit(it.copy(kind = PackKind.Correction)) }
+                        },
+                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                    ) {
+                        Text(stringResource(R.string.schedule_pack_kind_correction))
+                    }
+                }
+                Text(
+                    text = stringResource(
+                        if (pack.kind == PackKind.Correction) {
+                            R.string.schedule_pack_kind_correction_hint
+                        } else {
+                            R.string.schedule_pack_kind_base_hint
+                        },
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp),
                 )
             }
 
-            itemsIndexed(group.entries, key = { index, entry -> "bell-$index-${entry.time}" }) { index, entry ->
+            item(key = "validity") {
+                SectionHeader(text = stringResource(R.string.schedule_validity_title))
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedButtonBlock(
+                        label = stringResource(R.string.schedule_validity_from),
+                        value = pack.window.from?.fullDate()
+                            ?: stringResource(R.string.auto_window_not_set),
+                        onClick = { editFrom = true },
+                        modifier = Modifier.weight(1f),
+                    )
+                    OutlinedButtonBlock(
+                        label = stringResource(R.string.schedule_validity_to),
+                        value = pack.window.to?.fullDate()
+                            ?: stringResource(R.string.auto_window_not_set),
+                        onClick = { editTo = true },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Switch(
+                        checked = pack.window.yearly,
+                        onCheckedChange = { yearly ->
+                            currentPack()?.let {
+                                commit(it.copy(window = it.window.copy(yearly = yearly)))
+                            }
+                        },
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = stringResource(R.string.schedule_validity_yearly),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                if (!pack.window.isValid) {
+                    Text(
+                        text = stringResource(R.string.schedule_validity_invalid),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = stringResource(R.string.schedule_validity_dates),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(
+                        onClick = {
+                            val current = currentPack()
+                            if (current != null && current.canAddDate()) {
+                                addDate = true
+                            }
+                        },
+                    ) {
+                        Text(stringResource(R.string.schedule_validity_add_date))
+                    }
+                }
+                if (pack.window.dates.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.auto_window_not_set),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        pack.window.dates.sorted().forEach { date ->
+                            InputChip(
+                                selected = false,
+                                onClick = {
+                                    currentPack()?.let {
+                                        commit(
+                                            it.copy(
+                                                window = it.window.copy(
+                                                    dates = it.window.dates - date,
+                                                ),
+                                            ),
+                                        )
+                                    }
+                                },
+                                label = { Text(date.fullDate()) },
+                                trailingIcon = {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = stringResource(R.string.delete),
+                                    )
+                                },
+                            )
+                        }
+                    }
+                }
+                if (pack.window.isSet) {
+                    TextButton(
+                        onClick = {
+                            currentPack()?.let {
+                                commit(
+                                    it.copy(
+                                        window = it.window.copy(
+                                            from = null,
+                                            to = null,
+                                            dates = emptySet(),
+                                        ),
+                                    ),
+                                )
+                            }
+                        },
+                    ) {
+                        Text(stringResource(R.string.schedule_validity_clear))
+                    }
+                }
+            }
+
+            item(key = "entries-header") {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    SectionHeader(
+                        text = stringResource(R.string.schedule_entries_title) + " · " +
+                            stringResource(
+                                R.string.schedule_pack_entries_count,
+                                pack.entries.size,
+                                MAX_PACK_ENTRIES,
+                            ),
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(
+                        onClick = { clearConfirm = true },
+                        enabled = pack.entries.isNotEmpty(),
+                    ) {
+                        Text(stringResource(R.string.schedule_pack_clear))
+                    }
+                }
+            }
+
+            itemsIndexed(pack.entries, key = { index, entry -> "entry-$index-${entry.time}" }) { index, entry ->
                 SwipeToDeleteBox(
                     onDelete = {
-                        val current = viewModel.state.value.schedule.groupById(groupId) ?: return@SwipeToDeleteBox
-                        viewModel.updateSchedule(
-                            viewModel.state.value.schedule.withGroup(current.withoutEntry(index)),
-                            undoable = true,
-                        )
-                        viewModel.reportMessage(entryDeletedMessage)
+                        val current = currentPack()
+                        if (current != null) {
+                            commit(current.withoutEntry(index), undoable = true)
+                            viewModel.reportMessage(entryDeletedMessage)
+                        }
                     },
                 ) {
-                    BellRow(entry = entry, onClick = { entryTarget = EntryTarget(index) })
+                    BellRow(entry = entry, onClick = { entryIndex = index })
                 }
                 RowDivider()
             }
 
-            item(key = "add-bell") {
+            item(key = "add-entry") {
                 TextButton(
-                    onClick = { entryTarget = EntryTarget(null) },
-                    enabled = schedule.canAddEntries(1),
+                    onClick = { addingEntry = true },
+                    enabled = pack.canAddEntry(),
                     modifier = Modifier.heightIn(min = 48.dp),
                 ) {
-                    Text(stringResource(R.string.schedule_add_bell))
+                    Text(stringResource(R.string.schedule_add_entry))
                 }
             }
 
-            item(key = "builder") {
+            item(key = "tools") {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(onClick = { builderChoice = true }) {
+                    TextButton(onClick = { showBuilder = true }) {
                         Text(stringResource(R.string.schedule_build))
                     }
-                    TextButton(onClick = { shiftSheet = true }) {
+                    TextButton(
+                        onClick = { shiftSheet = true },
+                        enabled = pack.entries.isNotEmpty(),
+                    ) {
                         Text(stringResource(R.string.schedule_shift))
                     }
                 }
@@ -333,45 +465,31 @@ fun ScheduleEditorScreen(
         }
     }
 
-    entryTarget?.let { target ->
+    if (addingEntry) {
         BellEntrySheet(
-            initial = target.index?.let { group.entries.getOrNull(it) },
-            defaultDuration = state.ringSeconds,
-            days = group.days,
-            onDismiss = { entryTarget = null },
+            initial = null,
+            defaultDays = newEntryDays,
+            onDismiss = { addingEntry = false },
             onConfirm = { entry ->
-                val current = viewModel.state.value.schedule.groupById(groupId)
-                if (current != null) {
-                    val updated = if (target.index != null) {
-                        current.withEntry(target.index, entry)
-                    } else {
-                        current.withEntries(current.entries + entry)
-                    }
-                    viewModel.updateSchedule(
-                        viewModel.state.value.schedule.withGroup(updated),
-                        undoable = true,
-                    )
-                }
-                entryTarget = null
+                addingEntry = false
+                currentPack()?.let { commit(it.withEntries(it.entries + entry), undoable = true) }
             },
         )
     }
 
-    if (builderChoice) {
-        ChoiceSheet(
-            title = stringResource(R.string.schedule_build_mode),
-            options = listOf(
-                stringResource(R.string.schedule_build_replace),
-                stringResource(R.string.schedule_build_append),
-            ),
-            selectedIndex = -1,
-            onDismiss = { builderChoice = false },
-            onSelect = { index ->
-                builderChoice = false
-                builderMode = if (index == 0) BuilderApplyMode.Replace else BuilderApplyMode.Append
-                showBuilder = true
-            },
-        )
+    entryIndex?.let { index ->
+        val entry = pack.entries.getOrNull(index)
+        if (entry != null) {
+            BellEntrySheet(
+                initial = entry,
+                defaultDays = entry.days.ifEmpty { newEntryDays },
+                onDismiss = { entryIndex = null },
+                onConfirm = { updated ->
+                    entryIndex = null
+                    currentPack()?.let { commit(it.withEntry(index, updated), undoable = true) }
+                },
+            )
+        }
     }
 
     if (shiftSheet) {
@@ -384,71 +502,104 @@ fun ScheduleEditorScreen(
             onDismiss = { shiftSheet = false },
             onPick = { delta ->
                 shiftSheet = false
-                val current = viewModel.state.value.schedule.groupById(groupId)
+                val current = currentPack()
                 if (current != null) {
                     val shifted = current.entries.shiftBy(delta)
                     if (shifted.overflow) {
                         viewModel.reportMessage(shiftOverflowMessage)
                     } else {
-                        viewModel.updateSchedule(
-                            viewModel.state.value.schedule.withGroup(
-                                current.withEntries(shifted.entries),
-                            ),
-                            undoable = true,
-                        )
+                        commit(current.withEntries(shifted.entries), undoable = true)
                     }
                 }
             },
         )
     }
 
-    pendingDays?.let { target ->
-        val conflictMessage = dayConflict
-            .map { conflict ->
-                stringResource(
-                    R.string.schedule_overlap_move,
-                    weekdayName(conflict.day),
-                    conflict.group.displayName(),
-                )
-            }
-            .joinToString("\n")
+    if (clearConfirm) {
         ConfirmDialog(
-            title = stringResource(R.string.schedule_overlap_title),
-            message = conflictMessage,
-            confirmLabel = stringResource(R.string.schedule_overlap_confirm),
+            title = stringResource(R.string.schedule_pack_clear_title),
+            message = stringResource(R.string.schedule_pack_clear_text),
+            confirmLabel = stringResource(R.string.schedule_pack_clear),
             onConfirm = {
-                pendingDays = null
-                dayConflict = emptyList()
-                commitDays(target)
+                clearConfirm = false
+                currentPack()?.let { commit(it.withEntries(emptyList()), undoable = true) }
+                viewModel.reportMessage(clearedMessage)
             },
-            onDismiss = {
-                pendingDays = null
-                dayConflict = emptyList()
+            onDismiss = { clearConfirm = false },
+        )
+    }
+
+    if (editFrom) {
+        DateSheet(
+            initial = pack.window.from ?: LocalDate.now(),
+            onDismiss = { editFrom = false },
+            onPick = { date ->
+                editFrom = false
+                currentPack()?.let {
+                    commit(it.copy(window = it.window.copy(from = date)))
+                }
+            },
+        )
+    }
+
+    if (editTo) {
+        DateSheet(
+            initial = pack.window.to ?: LocalDate.now(),
+            onDismiss = { editTo = false },
+            onPick = { date ->
+                editTo = false
+                currentPack()?.let {
+                    commit(it.copy(window = it.window.copy(to = date)))
+                }
+            },
+        )
+    }
+
+    if (addDate) {
+        DateSheet(
+            initial = pack.window.dates.maxOrNull() ?: LocalDate.now(),
+            onDismiss = { addDate = false },
+            onPick = { date ->
+                addDate = false
+                currentPack()?.let {
+                    commit(it.copy(window = it.window.copy(dates = it.window.dates + date)))
+                }
             },
         )
     }
 }
 
-/** Time, label and duration of one bell. Shared by the editor and day editor. */
-@OptIn(ExperimentalMaterial3Api::class)
+/** Time, optional pair, weekdays and label of one entry. */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun BellEntrySheet(
     initial: BellEntry?,
-    defaultDuration: Int,
-    days: Set<Int>,
+    defaultDays: Set<Int>,
     onDismiss: () -> Unit,
     onConfirm: (BellEntry) -> Unit,
 ) {
-    var minute by rememberSaveable {
+    var minute by rememberSaveable(initial) {
         mutableIntStateOf(
             initial?.minutes?.takeIf { it != BellEntry.INVALID_MINUTE } ?: 8 * 60,
         )
     }
-    var label by rememberSaveable { mutableStateOf(initial?.label.orEmpty()) }
-    var duration by rememberSaveable { mutableIntStateOf(initial?.duration ?: defaultDuration) }
+    var pairEnabled by rememberSaveable(initial) { mutableStateOf(initial?.pair != null) }
+    var pairMinute by rememberSaveable(initial) {
+        mutableIntStateOf(
+            initial?.pairMinutes ?: ((minute + 45) % (24 * 60)),
+        )
+    }
+    var days by remember(initial) {
+        mutableStateOf(initial?.days?.ifEmpty { defaultDays } ?: defaultDays)
+    }
+    var label by rememberSaveable(initial) { mutableStateOf(initial?.label.orEmpty()) }
     var timeSheet by remember { mutableStateOf(false) }
+    var pairSheet by remember { mutableStateOf(false) }
+
     val labelError = labelTooLong(label)
     val labelErrorMessage = stringResource(R.string.schedule_label_too_long, MAX_LABEL_BYTES)
+    val noDays = days.isEmpty()
+    val samePair = pairEnabled && pairMinute == minute
 
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
@@ -460,8 +611,11 @@ fun BellEntrySheet(
         ) {
             Text(
                 text = stringResource(
-                    if (initial == null) R.string.schedule_entry_add_title
-                    else R.string.schedule_entry_edit_title,
+                    if (initial == null) {
+                        R.string.schedule_entry_add_title
+                    } else {
+                        R.string.schedule_entry_edit_title
+                    },
                 ),
                 style = MaterialTheme.typography.titleMedium,
             )
@@ -478,6 +632,75 @@ fun BellEntrySheet(
                     modifier = Modifier.padding(vertical = 8.dp),
                 )
             }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = stringResource(R.string.schedule_entry_pair),
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.weight(1f),
+                )
+                Switch(checked = pairEnabled, onCheckedChange = { pairEnabled = it })
+            }
+            if (pairEnabled) {
+                OutlinedButton(
+                    onClick = { pairSheet = true },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column {
+                        Text(
+                            text = stringResource(R.string.schedule_entry_pair_time),
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                        Text(
+                            text = minutesToTime(pairMinute),
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontFeatureSettings = TabularNumbers.fontFeatureSettings,
+                            ),
+                        )
+                    }
+                }
+                if (samePair) {
+                    Text(
+                        text = stringResource(R.string.schedule_entry_pair_same),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+
+            Text(
+                text = stringResource(R.string.schedule_entry_days),
+                style = MaterialTheme.typography.labelLarge,
+            )
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (day in 1..7) {
+                    FilterChip(
+                        selected = day in days,
+                        onClick = {
+                            days = if (day in days) days - day else days + day
+                        },
+                        label = { Text(weekdayName(day)) },
+                    )
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                AssistChip(
+                    onClick = { days = WEEKDAYS },
+                    label = { Text(stringResource(R.string.days_weekdays)) },
+                )
+                AssistChip(
+                    onClick = { days = ALL_DAYS },
+                    label = { Text(stringResource(R.string.days_every_day)) },
+                )
+            }
+            if (noDays) {
+                Text(
+                    text = stringResource(R.string.schedule_entry_days_required),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+
             OutlinedTextField(
                 value = label,
                 onValueChange = { label = it },
@@ -493,22 +716,18 @@ fun BellEntrySheet(
                     color = MaterialTheme.colorScheme.error,
                 )
             }
-            RingDurationPicker(
-                seconds = duration,
-                onSecondsChange = { duration = it },
-                label = stringResource(R.string.schedule_entry_duration),
-            )
+
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
                 Spacer(Modifier.width(8.dp))
                 Button(
-                    enabled = !labelError,
+                    enabled = !labelError && !noDays && !samePair,
                     onClick = {
                         onConfirm(
                             BellEntry(
                                 time = minutesToTime(minute),
+                                pair = if (pairEnabled) minutesToTime(pairMinute) else null,
                                 days = days,
-                                duration = duration,
                                 label = label.trim(),
                             ),
                         )
@@ -531,5 +750,15 @@ fun BellEntrySheet(
             },
         )
     }
+    if (pairSheet) {
+        TimeSheet(
+            title = stringResource(R.string.schedule_entry_pair_time),
+            initialMinute = pairMinute,
+            onDismiss = { pairSheet = false },
+            onPick = { picked ->
+                pairMinute = picked
+                pairSheet = false
+            },
+        )
+    }
 }
-

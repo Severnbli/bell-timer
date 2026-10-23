@@ -3,6 +3,7 @@ package com.belltimer.app.ui
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -21,6 +22,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
@@ -228,8 +230,10 @@ fun BellRow(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+            val pairText = entry.pair?.let { stringResource(R.string.schedule_pair_value, it) }
+            val daysText = daysSummary(entry.days)
             Text(
-                text = stringResource(R.string.duration_seconds, entry.duration),
+                text = listOfNotNull(pairText, daysText).joinToString(" · "),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -448,6 +452,45 @@ fun ChoiceSheet(
                     Text(text = option, style = MaterialTheme.typography.bodyLarge)
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun OutlinedButtonBlock(
+    label: String,
+    value: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    OutlinedButton(
+        onClick = onClick,
+        modifier = modifier.heightIn(min = 56.dp),
+    ) {
+        Column {
+            Text(text = label, style = MaterialTheme.typography.labelSmall)
+            Text(text = value, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ModalSheetText(
+    title: String,
+    onDismiss: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(text = title, style = MaterialTheme.typography.titleMedium)
+            content()
         }
     }
 }

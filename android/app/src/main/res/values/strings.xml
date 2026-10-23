@@ -70,7 +70,7 @@
     <string name="error_invalid_schedule">Расписание отклонено устройством.</string>
     <string name="error_invalid_request">Некорректный запрос.</string>
     <string name="error_invalid_ring_default">Недопустимая длительность звонка по умолчанию.</string>
-    <string name="error_too_many_entries">Слишком много звонков (максимум 256).</string>
+    <string name="error_too_many_entries">Слишком много записей (максимум 192).</string>
     <string name="error_too_many_groups">Слишком много расписаний (максимум 12).</string>
     <string name="error_too_many_overrides">Слишком много особых дней (максимум 90).</string>
     <string name="error_too_many_exceptions">Слишком много исключений по датам (старая прошивка).</string>
@@ -123,7 +123,7 @@
     <string name="schedule_override_deleted">Особый день удалён</string>
     <string name="schedule_check_date">Проверить дату</string>
     <string name="schedule_check_date_title">Звонки на %1$s</string>
-    <string name="schedule_needs_new_firmware">Нужно обновить прошивку устройства</string>
+    <string name="schedule_needs_new_firmware">Нужно обновить прошивку устройства: она не поддерживает пачки.</string>
     <string name="schedule_without_days">У расписания не выбраны дни недели</string>
     <string name="schedule_overlap_error">Один день недели назначен двум расписаниям</string>
     <string name="schedule_overlap_title">Перенести день?</string>
@@ -217,6 +217,7 @@
     <string name="day_reason_override">особый день</string>
     <string name="day_reason_outside">вне периода авто-режима</string>
     <string name="day_reason_none">звонков нет</string>
+    <string name="day_reason_packs">активны пачки: %1$s</string>
 
     <string name="settings_connection_title">Подключение</string>
     <string name="settings_base_url">Адрес устройства</string>
@@ -233,4 +234,49 @@
     <string name="settings_app_version">Версия приложения: %1$s</string>
     <string name="settings_fw_version">Версия прошивки: %1$s</string>
     <string name="settings_fw_unknown">неизвестно</string>
+
+    <string name="schedule_packs_title">Пачки</string>
+    <string name="schedule_packs_empty">Пачек нет</string>
+    <string name="schedule_add_pack">Добавить пачку</string>
+    <string name="schedule_pack_new_title">Новая пачка</string>
+    <string name="schedule_new_pack_name">Новая пачка</string>
+    <string name="schedule_new_correction_name">Новая коррекция</string>
+    <string name="schedule_pack_type_title">Тип пачки</string>
+    <string name="schedule_pack_kind_base">Основная</string>
+    <string name="schedule_pack_kind_correction">Коррекция</string>
+    <string name="schedule_pack_kind_base_hint">Основная пачка добавляет записи в расписание дня.</string>
+    <string name="schedule_pack_kind_correction_hint">Коррекция отменяет записи всех основных пачек, расположенных выше, и добавляет свои.</string>
+    <string name="schedule_pack_status_active">Активная</string>
+    <string name="schedule_pack_status_inactive">Не активная</string>
+    <string name="schedule_pack_enabled">Пачка включена</string>
+    <string name="schedule_pack_entries_count">%1$d из %2$d записей</string>
+    <string name="schedule_pack_move_up">Выше</string>
+    <string name="schedule_pack_move_down">Ниже</string>
+    <string name="schedule_pack_clear">Очистить</string>
+    <string name="schedule_pack_clear_title">Очистить пачку?</string>
+    <string name="schedule_pack_clear_text">Все записи этой пачки будут удалены.</string>
+    <string name="schedule_pack_cleared">Записи пачки удалены</string>
+    <string name="schedule_entries_title">Записи</string>
+    <string name="schedule_add_entry">Добавить запись</string>
+    <string name="schedule_entry_pair">Пара</string>
+    <string name="schedule_entry_pair_time">Время пары</string>
+    <string name="schedule_pair_value">Пара: %1$s</string>
+    <string name="schedule_entry_days">Дни недели</string>
+    <string name="schedule_entry_days_required">Выберите хотя бы один день</string>
+    <string name="schedule_entry_pair_same">Время пары совпадает с основным</string>
+    <string name="schedule_validity_title">Время действия</string>
+    <string name="schedule_validity_from">С</string>
+    <string name="schedule_validity_to">По</string>
+    <string name="schedule_validity_yearly">Повторять каждый год</string>
+    <string name="schedule_validity_dates">Отдельные даты</string>
+    <string name="schedule_validity_add_date">Добавить дату</string>
+    <string name="schedule_validity_clear">Сбросить период</string>
+    <string name="schedule_validity_invalid">Дата окончания раньше даты начала</string>
+    <string name="schedule_validity_none">Без ограничений</string>
+    <string name="schedule_today_title">Сегодня</string>
+    <string name="schedule_today_count">Звонков: %1$d</string>
+    <string name="schedule_pack_no_days">Дни не выбраны</string>
+    <string name="error_too_many_packs">Слишком много пачек (максимум 12).</string>
+    <string name="error_too_many_pack_entries">В пачке слишком много записей (максимум 16).</string>
+    <string name="error_too_many_pack_dates">Слишком много отдельных дат (максимум 24).</string>
 </resources>

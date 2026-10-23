@@ -33,8 +33,8 @@ import kotlin.math.roundToInt
 
 /**
  * Bell duration: a 1..10 s slider plus an opt-in free field for 1..60 s.
- * The same control is used on the control screen, in settings and in every
- * bell editor.
+ * Duration is a global setting, so this control lives on the Settings screen
+ * only; the manual ring button reuses the stored value.
  */
 @Composable
 fun RingDurationPicker(

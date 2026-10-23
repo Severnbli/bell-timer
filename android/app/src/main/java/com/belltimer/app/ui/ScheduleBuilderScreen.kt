@@ -52,8 +52,9 @@ import com.belltimer.app.data.BellPattern
 import com.belltimer.app.data.BuilderIssue
 import com.belltimer.app.data.BuilderSpec
 import com.belltimer.app.data.LessonRow
-import com.belltimer.app.data.MAX_SCHEDULE_ENTRIES
+import com.belltimer.app.data.MAX_PACK_ENTRIES
 import com.belltimer.app.data.ScheduleBuilder
+import com.belltimer.app.data.WEEKDAYS
 
 private data class BuilderPreset(
     @StringRes val labelRes: Int,
@@ -106,8 +107,8 @@ private const val QUICK_MINUTES = "5,10,15,20,30,40"
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class, ExperimentalFoundationApi::class)
 @Composable
 fun ScheduleBuilderScreen(
-    defaultDuration: Int,
     existingEntries: Int,
+    days: Set<Int> = WEEKDAYS,
     onDismiss: () -> Unit,
     onApply: (List<BellEntry>) -> Unit,
 ) {
@@ -124,7 +125,6 @@ fun ScheduleBuilderScreen(
         mutableStateOf(initial.toRows())
     }
     var pattern by rememberSaveable { mutableStateOf(BellPattern.StartAndEnd) }
-    var duration by rememberSaveable { mutableIntStateOf(defaultDuration) }
 
     var startSheet by remember { mutableStateOf(false) }
     var countSheet by remember { mutableStateOf(false) }
@@ -138,16 +138,16 @@ fun ScheduleBuilderScreen(
     val labelEnd = stringResource(R.string.builder_label_end)
     val quickValues = remember { QUICK_MINUTES.split(',').map { it.toInt() } }
 
-    val result = remember(rows, pattern, duration, startMinute, existingEntries) {
+    val result = remember(rows, pattern, startMinute, existingEntries, days) {
         ScheduleBuilder.build(
             BuilderSpec(
                 startMinute = startMinute,
                 rows = rows,
                 pattern = pattern,
-                durationSeconds = duration,
                 existingEntries = existingEntries,
-                maxEntries = MAX_SCHEDULE_ENTRIES,
+                maxEntries = MAX_PACK_ENTRIES,
             ),
+            days = days,
             labelStart = { number -> labelStart.format(number) },
             labelEnd = { number -> labelEnd.format(number) },
         )
@@ -336,12 +336,6 @@ fun ScheduleBuilderScreen(
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             }
 
-            RingDurationPicker(
-                seconds = duration,
-                onSecondsChange = { duration = it },
-                label = stringResource(R.string.schedule_entry_duration),
-            )
-
             SectionHeader(text = stringResource(R.string.builder_preview_title))
             if (result.entries.isEmpty()) {
                 Text(
@@ -513,5 +507,5 @@ private fun builderIssueText(issue: BuilderIssue): String = when (issue) {
     BuilderIssue.InvalidValues -> stringResource(R.string.builder_error_values)
     is BuilderIssue.PastMidnight -> stringResource(R.string.builder_error_past_midnight, issue.lesson)
     is BuilderIssue.TooManyBells ->
-        stringResource(R.string.builder_error_too_many, issue.total, MAX_SCHEDULE_ENTRIES)
+        stringResource(R.string.builder_error_too_many, issue.total, MAX_PACK_ENTRIES)
 }

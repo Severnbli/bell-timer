@@ -124,12 +124,6 @@ fun ControlScreen(state: UiState, viewModel: AppViewModel) {
             }
         }
 
-        RingDurationPicker(
-            seconds = state.ringSeconds,
-            onSecondsChange = viewModel::setRingSeconds,
-            label = stringResource(R.string.ring_duration),
-        )
-
         if (ringing) {
             Text(
                 text = stringResource(R.string.ringing_left, status?.ringLeft ?: 0),
