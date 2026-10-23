@@ -14,7 +14,7 @@
 * **Entries** now carry `time`, optional `pair`, `days` and `label`. The
   per-entry `duration` is gone: the ring duration is the device setting edited
   on the Settings screen only.
-* Limits: 12 packs, 16 entries per pack, 24 individual dates per pack and 192
+* Limits: 6 packs, 32 entries per pack, 24 individual dates per pack and 192
   entries in total.
 * New firmware (`1.3.0`, `api: 4`) migrates v1/v2/v3 documents in memory and
   rewrites storage as v4. New error codes `too_many_packs`,
@@ -23,9 +23,14 @@
 
 ### App
 
-* **Schedule tab** is now a vertical, reorderable list of packs with a
-  base/correction badge, an active/inactive status for today, an enable switch
-  and up/down arrows. The "Особые дни" tab and the day editor are removed.
+* **Top bar** with the device time in the middle, the connection status on the
+  left and the settings button on the right. The bottom navigation bar is
+  removed.
+* **Main menu** shows the mode switch, the next bell and the ring button. Time
+  is synchronised automatically; the manual sync button is removed.
+* **Schedule** opens with a swipe up as a bottom sheet, shows a month calendar
+  (base days in green, correction days in red, past days unlit) and a
+  drag-and-drop pack list.
 * **Pack editor**: editable name, type switch, enable switch, validity range,
   individual dates, yearly repeat, entry list with swipe-to-delete, a quick
   "Очистить" action, builder and move-by-N-minutes.

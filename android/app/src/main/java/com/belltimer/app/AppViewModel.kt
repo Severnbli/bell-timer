@@ -32,6 +32,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.time.Duration
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
@@ -75,6 +76,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private var pollJob: Job? = null
     private var undoSnapshot: BellSchedule? = null
+    private var autoSyncingTime = false
+    private var lastAutoSyncAt = 0L
 
     init {
         api.updateSettings(initialSettings)
@@ -128,6 +131,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             if (shouldLoadSchedule) {
                 loadScheduleInternal(showSuccessMessage = false)
             }
+            maybeAutoSyncTime(domain)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
@@ -222,30 +226,43 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun setTimeFromPhone() {
-        if (_state.value.busy) return
-        val now = LocalDateTime.now().withNano(0)
-        val payload = now.format(API_DATE_TIME_FORMAT)
-        viewModelScope.launch {
-            _state.update { it.copy(busy = true) }
-            try {
-                val response = api.setTime(payload)
-                if (!response.ok) {
-                    throw ApiException.Http(400, response.error ?: "invalid_datetime")
-                }
+    /**
+     * Keeps the device clock in step with the phone without any user action.
+     * Syncs when the device has no reliable clock (RTC missing or time unset)
+     * or when its clock has drifted by more than a minute, at most once every
+     * ten minutes.
+     */
+    private suspend fun maybeAutoSyncTime(domain: DeviceStatus) {
+        if (autoSyncingTime || _state.value.busy) return
+        val now = LocalDateTime.now()
+        val drift = domain.time?.let { Duration.between(it, now).abs().seconds }
+        val needsSync = domain.time == null || !domain.rtcOk || (drift != null && drift > 60)
+        if (!needsSync) return
+        if (System.currentTimeMillis() - lastAutoSyncAt < AUTO_SYNC_INTERVAL_MS) return
+
+        autoSyncingTime = true
+        try {
+            val payload = now.withNano(0).format(API_DATE_TIME_FORMAT)
+            val response = api.setTime(payload)
+            if (response.ok) {
+                lastAutoSyncAt = System.currentTimeMillis()
+                val fresh = api.getStatus().toDomain()
                 _state.update {
                     it.copy(
-                        busy = false,
+                        connection = ConnectionState.Online,
+                        status = fresh,
                         lastError = null,
-                        message = getApplication<Application>().getString(R.string.time_synced),
+                        deviceRingDefault = fresh.ringDefault,
+                        apiVersion = fresh.api,
                     )
                 }
-                refreshStatus()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Throwable) {
-                handleActionError(e)
             }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            // Silent: the next poll will retry when the conditions still hold.
+        } finally {
+            autoSyncingTime = false
         }
     }
 
@@ -603,6 +620,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private companion object {
         const val POLL_INTERVAL_MS = 2_000L
+        const val AUTO_SYNC_INTERVAL_MS = 10 * 60_000L
         val API_DATE_TIME_FORMAT: DateTimeFormatter =
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")
     }

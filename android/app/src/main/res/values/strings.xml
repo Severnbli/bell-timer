@@ -9,12 +9,10 @@
     <string name="connection_online">Подключено</string>
     <string name="connection_connecting">Подключение…</string>
     <string name="connection_offline">Нет связи</string>
-    <string name="device_time">Время</string>
-    <string name="device_time_unknown">Время не выставлено</string>
+
     <string name="device_offline_hint">Нет связи с устройством. Проверьте, что телефон подключён к Wi-Fi BellTimer.</string>
     <string name="wifi_settings_button">Настройки Wi-Fi</string>
-    <string name="time_sync_button">Синхронизировать время</string>
-    <string name="time_synced">Время установлено</string>
+
 
     <string name="mode_auto">Авто</string>
     <string name="mode_manual">Вручную</string>
@@ -33,7 +31,7 @@
     <string name="next_bell_none">Ближайших звонков нет</string>
 
     <string name="duration_seconds">%1$d с</string>
-    <string name="duration_custom">Своё</string>
+    <string name="duration_custom">Вручную</string>
     <string name="duration_custom_label">Секунды</string>
     <string name="duration_back_to_slider">Назад к ползунку</string>
     <string name="duration_range_hint">от %1$d до %2$d с</string>
@@ -92,7 +90,7 @@
     <string name="schedule_add">Добавить</string>
     <string name="schedule_new_title">Новое расписание</string>
     <string name="schedule_new_name">Новое расписание</string>
-    <string name="schedule_new_builder">Собрать по урокам</string>
+    <string name="schedule_new_builder">Собрать по шаблону</string>
     <string name="schedule_new_empty">Пустое</string>
     <string name="schedule_import_file">Импорт из файла</string>
     <string name="schedule_untitled">Без названия</string>
@@ -133,8 +131,8 @@
     <string name="schedule_duplicate">Дублировать</string>
     <string name="schedule_copy_suffix">(копия)</string>
     <string name="schedule_add_bell">Добавить звонок</string>
-    <string name="schedule_build">Собрать по урокам</string>
-    <string name="schedule_build_title">Собрать по урокам</string>
+    <string name="schedule_build">Собрать по шаблону</string>
+    <string name="schedule_build_title">Собрать по шаблону</string>
     <string name="schedule_build_mode">Как добавить звонки?</string>
     <string name="schedule_build_replace">Заменить список</string>
     <string name="schedule_build_append">Добавить к списку</string>
@@ -154,7 +152,7 @@
     <string name="schedule_overrides_empty">Особых дней нет</string>
     <string name="schedule_overrides_past">Прошедшие (%1$d)</string>
     <string name="schedule_override_mute">Без звонков</string>
-    <string name="schedule_override_replace">Свой список</string>
+    <string name="schedule_override_replace">Другой список</string>
     <string name="schedule_override_add">Дополнительные звонки</string>
     <string name="schedule_override_add_action">Добавить особый день</string>
 
@@ -164,45 +162,45 @@
     <string name="auto_window_not_set">Не задано</string>
     <string name="auto_window_clear">Сбросить</string>
 
-    <string name="schedule_preset_custom">Своё</string>
-    <string name="schedule_preset_school45">Школа 45</string>
-    <string name="schedule_preset_school40">Школа 40</string>
-    <string name="schedule_preset_college">Колледж 45/5</string>
-    <string name="schedule_preset_university">Вуз 90</string>
-    <string name="builder_start">Первый урок</string>
-    <string name="builder_count">Уроков</string>
-    <string name="builder_count_field">Количество уроков</string>
-    <string name="builder_pattern_title">Звонки на уроке</string>
+    <string name="schedule_preset_custom">Вручную</string>
+    <string name="schedule_preset_school45">45 мин × 7</string>
+    <string name="schedule_preset_school40">40 мин × 6</string>
+    <string name="schedule_preset_college">45 мин × 8</string>
+    <string name="schedule_preset_university">90 мин × 5</string>
+    <string name="builder_start">Начало</string>
+    <string name="builder_count">Периодов</string>
+    <string name="builder_count_field">Количество периодов</string>
+    <string name="builder_pattern_title">Звонки периода</string>
     <string name="builder_pattern_both">Оба</string>
     <string name="builder_pattern_start">Начало</string>
     <string name="builder_pattern_end">Конец</string>
     <string name="builder_table_number">№</string>
     <string name="builder_table_time">Время</string>
-    <string name="builder_table_length">Урок</string>
-    <string name="builder_table_break">Перемена</string>
-    <string name="builder_length_title">Урок %1$d: длительность, мин</string>
-    <string name="builder_length_field">Длительность урока, мин</string>
-    <string name="builder_default_length">Урок, мин</string>
-    <string name="builder_default_break">Перемена, мин</string>
+    <string name="builder_table_length">Период</string>
+    <string name="builder_table_break">Пауза</string>
+    <string name="builder_length_title">Период %1$d: длительность, мин</string>
+    <string name="builder_length_field">Длительность периода, мин</string>
+    <string name="builder_default_length">Период, мин</string>
+    <string name="builder_default_break">Пауза, мин</string>
     <string name="builder_apply_all_title">Применить ко всем?</string>
-    <string name="builder_apply_all_text">Перемена %1$d мин для всех уроков</string>
-    <string name="builder_break_title">Перемена после %1$d урока, мин</string>
-    <string name="builder_break_field">Перемена, мин</string>
+    <string name="builder_apply_all_text">Пауза %1$d мин для всех периодов</string>
+    <string name="builder_break_title">Пауза после %1$d периода, мин</string>
+    <string name="builder_break_field">Пауза, мин</string>
     <string name="builder_preview_title">Итог</string>
     <string name="builder_preview_empty">Звонков пока нет</string>
     <string name="builder_preview_count">Всего %1$d звонков</string>
-    <string name="builder_label_start">Урок %1$d — начало</string>
-    <string name="builder_label_end">Урок %1$d — конец</string>
-    <string name="builder_error_no_lessons">Добавьте хотя бы один урок</string>
-    <string name="builder_error_values">Проверьте длительность урока и перемены</string>
-    <string name="builder_error_past_midnight">Урок %1$d выходит за 24:00</string>
+    <string name="builder_label_start">Период %1$d — начало</string>
+    <string name="builder_label_end">Период %1$d — конец</string>
+    <string name="builder_error_no_lessons">Добавьте хотя бы один период</string>
+    <string name="builder_error_values">Проверьте длительность периода и паузы</string>
+    <string name="builder_error_past_midnight">Период %1$d выходит за 24:00</string>
     <string name="builder_error_too_many">Получится %1$d звонков при лимите %2$d</string>
 
     <string name="day_title">%1$s · %2$s</string>
     <string name="day_normal_schedule">Обычно: «%1$s», %2$d звонков</string>
     <string name="day_normal_none">Обычно звонков нет</string>
     <string name="day_mode_mute">Без звонков</string>
-    <string name="day_mode_replace">Свой список на этот день</string>
+    <string name="day_mode_replace">Другой список на этот день</string>
     <string name="day_mode_add">Добавить звонки к обычным</string>
     <string name="day_based_on">Основано на «%1$s»</string>
     <string name="day_extra_title">Дополнительные звонки</string>
@@ -224,7 +222,7 @@
     <string name="settings_base_url_hint">http://192.168.4.1</string>
     <string name="settings_token">Токен доступа (необязательно)</string>
     <string name="settings_ring_title">Звонок по умолчанию</string>
-    <string name="settings_time_title">Время</string>
+
     <string name="settings_about_title">О приложении</string>
     <string name="settings_invalid_url">Некорректный адрес устройства.</string>
     <string name="settings_invalid_duration">Длительность должна быть от 1 до 60 с.</string>
@@ -276,7 +274,15 @@
     <string name="schedule_today_title">Сегодня</string>
     <string name="schedule_today_count">Звонков: %1$d</string>
     <string name="schedule_pack_no_days">Дни не выбраны</string>
-    <string name="error_too_many_packs">Слишком много пачек (максимум 12).</string>
-    <string name="error_too_many_pack_entries">В пачке слишком много записей (максимум 16).</string>
+    <string name="error_too_many_packs">Слишком много пачек (максимум 6).</string>
+    <string name="error_too_many_pack_entries">В пачке слишком много записей (максимум 32).</string>
     <string name="error_too_many_pack_dates">Слишком много отдельных дат (максимум 24).</string>
+    <string name="control_mode_title">Режим работы</string>
+    <string name="control_mode_auto_hint">Устройство звонит по расписанию автоматически.</string>
+    <string name="control_mode_manual_hint">Устройство звонит только по кнопке.</string>
+    <string name="schedule_open_hint">Расписание</string>
+    <string name="schedule_packs_count">Пачки: %1$d из %2$d</string>
+    <string name="schedule_pack_reorder">Перетащить</string>
+    <string name="calendar_prev">Предыдущий месяц</string>
+    <string name="calendar_next">Следующий месяц</string>
 </resources>

@@ -1,36 +1,25 @@
 package com.belltimer.app.ui
 
-import android.content.Intent
-import android.provider.Settings
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -44,7 +33,6 @@ import java.time.temporal.ChronoUnit
 
 @Composable
 fun ControlScreen(state: UiState, viewModel: AppViewModel) {
-    val context = LocalContext.current
     val online = state.connection == ConnectionState.Online
     val status = state.status
     val ringing = status?.ringing == true
@@ -52,112 +40,126 @@ fun ControlScreen(state: UiState, viewModel: AppViewModel) {
     val next = remember(state.schedule, deviceTime) {
         deviceTime?.let { state.schedule.nextBell(it) }
     }
-    val clockOff = !online && status == null ||
-        status?.rtcOk == false ||
-        status?.time == null
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
+        ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 Text(
-                    text = stringResource(R.string.device_time),
-                    style = MaterialTheme.typography.labelMedium,
+                    text = stringResource(R.string.control_mode_title),
+                    style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    SegmentedButton(
+                        selected = status?.isAuto == true,
+                        onClick = { viewModel.setMode(true) },
+                        enabled = online && !state.busy,
+                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                    ) {
+                        Text(stringResource(R.string.mode_auto))
+                    }
+                    SegmentedButton(
+                        selected = status?.isAuto == false,
+                        onClick = { viewModel.setMode(false) },
+                        enabled = online && !state.busy,
+                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                    ) {
+                        Text(stringResource(R.string.mode_manual))
+                    }
+                }
                 Text(
-                    text = deviceTime?.deviceClock()
-                        ?: stringResource(R.string.device_time_unknown),
-                    style = MaterialTheme.typography.headlineMedium.copy(
-                        fontFeatureSettings = TabularNumbers.fontFeatureSettings,
+                    text = stringResource(
+                        if (status?.isAuto == true) {
+                            R.string.control_mode_auto_hint
+                        } else {
+                            R.string.control_mode_manual_hint
+                        },
                     ),
-                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            }
-            ConnectionIndicator(state.connection)
-        }
-
-        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-            SegmentedButton(
-                selected = status?.isAuto == true,
-                onClick = { viewModel.setMode(true) },
-                enabled = online && !state.busy,
-                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-            ) {
-                Text(stringResource(R.string.mode_auto))
-            }
-            SegmentedButton(
-                selected = status?.isAuto == false,
-                onClick = { viewModel.setMode(false) },
-                enabled = online && !state.busy,
-                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-            ) {
-                Text(stringResource(R.string.mode_manual))
             }
         }
 
         if (status?.isAuto == true) {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    text = stringResource(R.string.next_bell_title),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    text = nextBellText(next, deviceTime),
-                    style = MaterialTheme.typography.titleLarge.copy(
-                        fontFeatureSettings = TabularNumbers.fontFeatureSettings,
-                    ),
-                )
-                next?.entry?.label?.takeIf { it.isNotBlank() }?.let { label ->
+            ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
                     Text(
-                        text = label,
-                        style = MaterialTheme.typography.bodySmall,
+                        text = stringResource(R.string.next_bell_title),
+                        style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    Text(
+                        text = nextBellText(next, deviceTime),
+                        style = MaterialTheme.typography.headlineSmall.copy(
+                            fontFeatureSettings = TabularNumbers.fontFeatureSettings,
+                        ),
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    next?.entry?.label?.takeIf { it.isNotBlank() }?.let { label ->
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }
 
-        if (ringing) {
-            Text(
-                text = stringResource(R.string.ringing_left, status?.ringLeft ?: 0),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.primary,
-            )
-        }
-        Button(
-            onClick = {
-                if (ringing) {
-                    viewModel.stopRing()
-                } else {
-                    viewModel.ring(state.ringSeconds)
+        ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Button(
+                    onClick = {
+                        if (ringing) {
+                            viewModel.stopRing()
+                        } else {
+                            viewModel.ring(state.ringSeconds)
+                        }
+                    },
+                    enabled = online && !state.busy,
+                    colors = if (ringing) {
+                        ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError,
+                        )
+                    } else {
+                        ButtonDefaults.buttonColors()
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 64.dp),
+                ) {
+                    Text(
+                        text = stringResource(
+                            if (ringing) R.string.stop_button else R.string.ring_button,
+                        ),
+                        style = MaterialTheme.typography.titleLarge,
+                    )
                 }
-            },
-            enabled = online && !state.busy,
-            colors = if (ringing) {
-                ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.error,
-                    contentColor = MaterialTheme.colorScheme.onError,
-                )
-            } else {
-                ButtonDefaults.buttonColors()
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 56.dp),
-        ) {
-            Text(
-                text = stringResource(
-                    if (ringing) R.string.stop_button else R.string.ring_button,
-                ),
-                style = MaterialTheme.typography.titleMedium,
-            )
+                if (ringing) {
+                    Text(
+                        text = stringResource(R.string.ringing_left, status?.ringLeft ?: 0),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
         }
 
         val errorLine = state.lastError ?: status?.errors?.firstOrNull()?.let { deviceErrorLabel(it) }
@@ -169,52 +171,14 @@ fun ControlScreen(state: UiState, viewModel: AppViewModel) {
             )
         }
 
-        if (clockOff && online) {
-            TextButton(onClick = viewModel::setTimeFromPhone, enabled = !state.busy) {
-                Text(stringResource(R.string.time_sync_button))
-            }
-        }
-
         if (!online) {
             Text(
                 text = stringResource(R.string.device_offline_hint),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            TextButton(
-                onClick = {
-                    runCatching {
-                        context.startActivity(Intent(Settings.ACTION_WIFI_SETTINGS))
-                    }
-                },
-            ) {
-                Text(stringResource(R.string.wifi_settings_button))
-            }
         }
         Spacer(Modifier.heightIn(min = 8.dp))
-    }
-}
-
-@Composable
-private fun ConnectionIndicator(connection: ConnectionState) {
-    val color = when (connection) {
-        ConnectionState.Online -> Color(0xFF2E7D32)
-        ConnectionState.Connecting -> MaterialTheme.colorScheme.primary
-        ConnectionState.Offline -> MaterialTheme.colorScheme.error
-    }
-    val label = when (connection) {
-        ConnectionState.Online -> stringResource(R.string.connection_online)
-        ConnectionState.Connecting -> stringResource(R.string.connection_connecting)
-        ConnectionState.Offline -> stringResource(R.string.connection_offline)
-    }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            modifier = Modifier
-                .size(8.dp)
-                .background(color, CircleShape),
-        )
-        Spacer(Modifier.width(6.dp))
-        Text(text = label, style = MaterialTheme.typography.bodySmall, color = color)
     }
 }
 

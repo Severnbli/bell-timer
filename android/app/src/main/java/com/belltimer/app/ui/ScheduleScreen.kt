@@ -1,13 +1,13 @@
 package com.belltimer.app.ui
 
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.BackHandler
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -15,13 +15,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
@@ -35,23 +34,30 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.listSaver
-import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import com.belltimer.app.AppViewModel
 import com.belltimer.app.R
 import com.belltimer.app.UiState
 import com.belltimer.app.data.AutoWindow
 import com.belltimer.app.data.BellSchedule
+import com.belltimer.app.data.MAX_PACKS
 import com.belltimer.app.data.MAX_PACK_ENTRIES
 import com.belltimer.app.data.PackKind
 import com.belltimer.app.data.PackWindow
@@ -60,39 +66,19 @@ import com.belltimer.app.data.SchedulePack
 import com.belltimer.app.data.canAddPack
 import java.time.LocalDate
 
-/** Plain state-based navigation inside the schedule tab. */
-sealed interface ScheduleRoute {
-    data object Packs : ScheduleRoute
-    data class Editor(val packId: Int) : ScheduleRoute
-}
-
-private val ScheduleRouteSaver = listSaver<ScheduleRoute, Any>(
-    save = { route ->
-        when (route) {
-            ScheduleRoute.Packs -> listOf("packs")
-            is ScheduleRoute.Editor -> listOf("editor", route.packId)
-        }
-    },
-    restore = { saved ->
-        when (saved.firstOrNull() as? String) {
-            "editor" -> ScheduleRoute.Editor(saved.getOrNull(1) as? Int ?: 0)
-            else -> ScheduleRoute.Packs
-        }
-    },
-)
-
 @Composable
 fun SchedulePack.displayName(): String =
     name.ifBlank { stringResource(R.string.schedule_untitled) }
 
 @Composable
-fun ScheduleScreen(state: UiState, viewModel: AppViewModel) {
+fun ScheduleScreen(
+    state: UiState,
+    viewModel: AppViewModel,
+    onBack: () -> Unit,
+    onOpenPack: (Int) -> Unit,
+) {
     val schedule = state.schedule
-    var route by rememberSaveable(stateSaver = ScheduleRouteSaver) {
-        mutableStateOf<ScheduleRoute>(ScheduleRoute.Packs)
-    }
     var newPackSheet by remember { mutableStateOf(false) }
-    var checkDate by remember { mutableStateOf(false) }
     var checkedDate by remember { mutableStateOf<LocalDate?>(null) }
     var autoSheet by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
@@ -139,18 +125,7 @@ fun ScheduleScreen(state: UiState, viewModel: AppViewModel) {
         }
     }
 
-    when (val current = route) {
-        is ScheduleRoute.Editor -> {
-            ScheduleEditorScreen(
-                state = state,
-                viewModel = viewModel,
-                packId = current.packId,
-                onBack = { route = ScheduleRoute.Packs },
-            )
-            return
-        }
-        ScheduleRoute.Packs -> Unit
-    }
+    BackHandler { onBack() }
 
     Column(
         modifier = Modifier
@@ -158,6 +133,12 @@ fun ScheduleScreen(state: UiState, viewModel: AppViewModel) {
             .padding(horizontal = 16.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) {
+                Icon(
+                    Icons.Default.Close,
+                    contentDescription = stringResource(R.string.back_desc),
+                )
+            }
             SectionHeader(
                 text = stringResource(R.string.schedule_packs_title),
                 modifier = Modifier.weight(1f),
@@ -197,13 +178,6 @@ fun ScheduleScreen(state: UiState, viewModel: AppViewModel) {
                         },
                     )
                     DropdownMenuItem(
-                        text = { Text(stringResource(R.string.schedule_check_date)) },
-                        onClick = {
-                            menuOpen = false
-                            checkDate = true
-                        },
-                    )
-                    DropdownMenuItem(
                         text = { Text(stringResource(R.string.auto_window_title)) },
                         onClick = {
                             menuOpen = false
@@ -214,52 +188,67 @@ fun ScheduleScreen(state: UiState, viewModel: AppViewModel) {
             }
         }
 
-        TodaySummary(schedule)
-
-        if (!state.supportsPacks) {
-            Text(
-                text = stringResource(R.string.schedule_needs_new_firmware),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(bottom = 8.dp),
+        if (state.scheduleDirty) {
+            DirtyBar(
+                onSend = viewModel::sendSchedule,
+                onDiscard = viewModel::discardScheduleChanges,
+                enabled = !state.busy,
             )
         }
 
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
-            if (schedule.packs.isEmpty()) {
-                item(key = "packs-empty") {
-                    EmptyState(
-                        text = stringResource(R.string.schedule_packs_empty),
-                        actionLabel = stringResource(R.string.schedule_add_pack),
-                        onAction = {
-                            if (schedule.canAddPack()) {
-                                newPackSheet = true
-                            } else {
-                                viewModel.reportMessage(tooManyPacksMessage)
-                            }
-                        },
-                    )
-                }
-            } else {
-                itemsIndexed(schedule.packs, key = { _, pack -> "pack-${pack.id}" }) { index, pack ->
-                    PackRow(
-                        pack = pack,
-                        index = index,
-                        lastIndex = schedule.packs.lastIndex,
-                        onOpen = { route = ScheduleRoute.Editor(pack.id) },
-                        onToggle = { enabled ->
-                            viewModel.updateSchedule(
-                                schedule.withPack(pack.copy(enabled = enabled)),
-                            )
-                        },
-                        onMove = { delta ->
-                            viewModel.updateSchedule(schedule.movePack(pack.id, delta))
-                        },
-                    )
-                    RowDivider()
-                }
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            ScheduleCalendar(
+                schedule = schedule,
+                onDayClick = { date -> checkedDate = date },
+                modifier = Modifier.padding(top = 4.dp),
+            )
+
+            if (!state.supportsPacks) {
+                Text(
+                    text = stringResource(R.string.schedule_needs_new_firmware),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
             }
-            item(key = "bottom-space") { Spacer(Modifier.height(24.dp)) }
+
+            SectionHeader(
+                text = stringResource(R.string.schedule_packs_count, schedule.packs.size, MAX_PACKS),
+            )
+
+            if (schedule.packs.isEmpty()) {
+                EmptyState(
+                    text = stringResource(R.string.schedule_packs_empty),
+                    actionLabel = stringResource(R.string.schedule_add_pack),
+                    onAction = {
+                        if (schedule.canAddPack()) {
+                            newPackSheet = true
+                        } else {
+                            viewModel.reportMessage(tooManyPacksMessage)
+                        }
+                    },
+                )
+            } else {
+                ReorderablePackList(
+                    packs = schedule.packs,
+                    onReorder = { ordered ->
+                        if (ordered != schedule.packs) {
+                            viewModel.updateSchedule(schedule.copy(packs = ordered))
+                        }
+                    },
+                    onOpen = onOpenPack,
+                    onToggle = { id, enabled ->
+                        schedule.packById(id)?.let { pack ->
+                            viewModel.updateSchedule(schedule.withPack(pack.copy(enabled = enabled)))
+                        }
+                    },
+                )
+            }
+            Spacer(Modifier.height(24.dp))
         }
     }
 
@@ -281,7 +270,7 @@ fun ScheduleScreen(state: UiState, viewModel: AppViewModel) {
                     kind = kind,
                 )
                 viewModel.updateSchedule(schedule.withPack(pack))
-                route = ScheduleRoute.Editor(pack.id)
+                onOpenPack(pack.id)
             },
         )
     }
@@ -293,17 +282,6 @@ fun ScheduleScreen(state: UiState, viewModel: AppViewModel) {
             onConfirm = { window ->
                 autoSheet = false
                 viewModel.updateSchedule(state.schedule.copy(auto = window))
-            },
-        )
-    }
-
-    if (checkDate) {
-        DateSheet(
-            initial = LocalDate.now(),
-            onDismiss = { checkDate = false },
-            onPick = { date ->
-                checkDate = false
-                checkedDate = date
             },
         )
     }
@@ -333,56 +311,12 @@ fun ScheduleScreen(state: UiState, viewModel: AppViewModel) {
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun TodaySummary(schedule: BellSchedule) {
-    val today = LocalDate.now()
-    val bells = remember(schedule, today) { schedule.bellsFor(today) }
-
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(
-            text = stringResource(R.string.schedule_today_title) + " · " + today.fullDate(),
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-            text = stringResource(R.string.schedule_today_count, bells.size),
-            style = MaterialTheme.typography.titleMedium,
-        )
-        if (bells.isEmpty()) {
-            Text(
-                text = stringResource(R.string.schedule_timeline_empty),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        } else {
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                bells.forEach { entry ->
-                    Text(
-                        text = entry.time,
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            fontFeatureSettings = TabularNumbers.fontFeatureSettings,
-                        ),
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                }
-            }
-        }
-        Spacer(Modifier.height(4.dp))
-    }
-}
-
 @Composable
 private fun PackRow(
     pack: SchedulePack,
-    index: Int,
-    lastIndex: Int,
     onOpen: () -> Unit,
     onToggle: (Boolean) -> Unit,
-    onMove: (Int) -> Unit,
+    dragHandle: @Composable () -> Unit,
 ) {
     val today = LocalDate.now()
     val active = pack.appliesOn(today)
@@ -419,11 +353,12 @@ private fun PackRow(
             .padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        dragHandle()
         Column(
             modifier = Modifier
                 .weight(1f)
                 .clickable(onClick = onOpen)
-                .padding(end = 8.dp),
+                .padding(start = 4.dp, end = 8.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
@@ -458,30 +393,85 @@ private fun PackRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            IconButton(
-                onClick = { onMove(-1) },
-                enabled = index > 0,
-                modifier = Modifier.size(32.dp),
-            ) {
-                Icon(
-                    Icons.Default.KeyboardArrowUp,
-                    contentDescription = stringResource(R.string.schedule_pack_move_up),
-                )
-            }
-            IconButton(
-                onClick = { onMove(1) },
-                enabled = index < lastIndex,
-                modifier = Modifier.size(32.dp),
-            ) {
-                Icon(
-                    Icons.Default.KeyboardArrowDown,
-                    contentDescription = stringResource(R.string.schedule_pack_move_down),
-                )
-            }
-        }
         Spacer(Modifier.width(4.dp))
         Switch(checked = pack.enabled, onCheckedChange = onToggle)
+    }
+}
+
+@Composable
+private fun ReorderablePackList(
+    packs: List<SchedulePack>,
+    onReorder: (List<SchedulePack>) -> Unit,
+    onOpen: (Int) -> Unit,
+    onToggle: (Int, Boolean) -> Unit,
+) {
+    val ordered = remember(packs) { packs.toMutableStateList() }
+    var draggingId by remember { mutableStateOf<Int?>(null) }
+    var dragOffset by remember { mutableFloatStateOf(0f) }
+    val rowHeights = remember { mutableStateMapOf<Int, Int>() }
+    val currentOnReorder by rememberUpdatedState(onReorder)
+
+    Column {
+        ordered.forEach { pack ->
+            val isDragging = draggingId == pack.id
+            Box(
+                modifier = Modifier
+                    .onSizeChanged { rowHeights[pack.id] = it.height }
+                    .graphicsLayer { translationY = if (isDragging) dragOffset else 0f }
+                    .zIndex(if (isDragging) 1f else 0f),
+            ) {
+                PackRow(
+                    pack = pack,
+                    onOpen = { onOpen(pack.id) },
+                    onToggle = { enabled -> onToggle(pack.id, enabled) },
+                    dragHandle = {
+                        Icon(
+                            imageVector = Icons.Default.DragHandle,
+                            contentDescription = stringResource(R.string.schedule_pack_reorder),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .pointerInput(pack.id) {
+                                    detectDragGestures(
+                                        onDragStart = {
+                                            draggingId = pack.id
+                                            dragOffset = 0f
+                                        },
+                                        onDragEnd = {
+                                            draggingId = null
+                                            dragOffset = 0f
+                                            currentOnReorder(ordered.toList())
+                                        },
+                                        onDragCancel = {
+                                            draggingId = null
+                                            dragOffset = 0f
+                                        },
+                                        onDrag = { change, amount ->
+                                            change.consume()
+                                            dragOffset += amount.y
+                                            val heightPx = (rowHeights[pack.id] ?: 0).toFloat()
+                                            if (heightPx > 0f) {
+                                                val current = ordered.indexOfFirst { it.id == pack.id }
+                                                var target = current
+                                                if (dragOffset > heightPx / 2f && current < ordered.lastIndex) {
+                                                    target = current + 1
+                                                } else if (dragOffset < -heightPx / 2f && current > 0) {
+                                                    target = current - 1
+                                                }
+                                                if (target != current) {
+                                                    val moved = ordered.removeAt(current)
+                                                    ordered.add(target, moved)
+                                                    dragOffset -= (target - current) * heightPx
+                                                }
+                                            }
+                                        },
+                                    )
+                                },
+                        )
+                    },
+                )
+            }
+            RowDivider()
+        }
     }
 }
 
