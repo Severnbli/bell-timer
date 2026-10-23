@@ -22,6 +22,7 @@
   `POST /time`, stored in flash).
 * A bell still fires within 5 s of its minute if the loop was busy at second 0;
   a scheduled bell extends a shorter manual ring instead of being skipped.
+* `POST /reset` deletes the schedule and settings (factory reset).
 * The built-in HTML page was redesigned and can sync the time from the browser.
 
 ### App
@@ -38,6 +39,12 @@
   module sheet per type with a live preview of the bells, "Сетка уроков" with
   a long break, shift-all and duplicate.
 * Automatic time sync can be turned off in the settings.
+* Factory reset (`POST /reset`) from the Settings tab.
+* Ring duration: a 1–10 s slider plus a custom value up to 60 s.
+* Schedule tab: full month calendar, the day's bells open on tap; tap a pack
+  for its options, drag packs to reorder. Pack kinds are named "Основное" and
+  "Коррекция".
+* Back from the Schedule or Settings tab returns to the main tab.
 
 
 ## Unreleased — schedule version 4 (packs)

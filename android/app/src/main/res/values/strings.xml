@@ -120,18 +120,19 @@
     <string name="schedule_export_empty">Расписание пусто — нечего экспортировать</string>
     <string name="schedule_too_large">В файле больше данных, чем помещается в устройство</string>
 
-    <string name="week_prev">Предыдущая неделя</string>
-    <string name="week_next">Следующая неделя</string>
     <string name="week_today">Сегодня</string>
     <string name="month_prev">Предыдущий месяц</string>
     <string name="month_next">Следующий месяц</string>
-    <string name="legend_base">обычный</string>
+    <string name="legend_base">основное</string>
     <string name="legend_correction">коррекция</string>
     <string name="legend_muted">выходной</string>
 
     <string name="day_outside_auto">Вне периода работы</string>
     <string name="day_muted">Выходной — без звонков</string>
     <string name="day_empty">В этот день звонков нет</string>
+    <string name="day_add_correction">Коррекция</string>
+    <string name="day_add_holiday">Выходной</string>
+    <string name="calendar_hint">Нажмите на день, чтобы увидеть его звонки</string>
     <string name="agenda_pre">предв. %1$s</string>
 
     <string name="auto_window_title">Период работы</string>
@@ -163,18 +164,23 @@
     <string name="pack_new_holiday_name">Выходной %1$s</string>
     <string name="pack_new_correction_hint">Другие звонки на %1$s вместо обычных</string>
     <string name="pack_new_holiday_hint">Отменить все звонки %1$s</string>
-    <string name="pack_kind_base">Основная</string>
+    <string name="pack_kind_base">Основное</string>
     <string name="pack_kind_correction">Коррекция</string>
     <string name="pack_kind_holiday">Выходной</string>
-    <string name="pack_kind_base_hint">Добавляет свои звонки к расписанию дня.</string>
-    <string name="pack_kind_correction_hint">В свои дни отменяет звонки всех основных пачек выше и звонит по своим модулям.</string>
+    <string name="pack_kind_base_hint">Основное расписание: добавляет свои звонки к расписанию дня.</string>
+    <string name="pack_kind_correction_hint">В свои дни отменяет звонки всех «Основных» пачек выше и звонит по своим модулям.</string>
     <string name="pack_name">Название</string>
     <string name="pack_mute">Выходной</string>
     <string name="pack_mute_hint">Только отменить звонки, свои модули не нужны</string>
-    <string name="pack_holiday_hint">В даты этой пачки звонки основных пачек выше отменяются. Задайте даты в «Когда действует».</string>
+    <string name="pack_holiday_hint">В даты этой пачки звонки «Основных» пачек выше отменяются. Задайте даты в «Когда действует».</string>
     <string name="pack_enabled">Включена</string>
     <string name="pack_enabled_on">Участвует в расписании</string>
     <string name="pack_enabled_off">Выключена и не звонит</string>
+    <string name="pack_open">Редактировать</string>
+    <string name="pack_enable">Включить</string>
+    <string name="pack_disable">Выключить</string>
+    <string name="pack_drag">Перетащить</string>
+    <string name="packs_drag_hint">Нажмите на пачку для действий. Порядок важен для коррекций: удерживайте карточку и перетащите.</string>
     <string name="pack_move_up">Выше</string>
     <string name="pack_move_down">Ниже</string>
     <string name="pack_duplicate">Дублировать</string>

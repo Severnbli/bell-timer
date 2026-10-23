@@ -202,22 +202,26 @@ phone); add a release keystore if you need a Play-style signed build.
    also does it by itself when the device time is unset or off by more than a
    minute. Below are the running lesson with its progress, the next bell, the
    big ring button, the Авто/Вручную switch and today's bells.
-5. **Расписание** shows a week strip (tap the month for a full calendar), the
-   resolved bells of the selected day and the list of **packs** (`пачки`). A
-   pack holds **modules**:
+5. **Расписание** shows a full month calendar coloured by day kind; tap a
+   day to see its bells and to add a correction or a holiday for it. Below is
+   the list of **packs** (`пачки`): tap a pack for its options (edit, enable,
+   duplicate, move, delete), long-press or drag its handle to reorder. A pack
+   holds **modules**:
    * **Урок** – rings at the start and at the end, optionally with a warning
      bell N minutes before the start;
    * **Звонок** – one bell;
    * **Серия** – a bell every N minutes between two times.
    "Сетка уроков" creates a whole day of lessons with breaks and a long break
-   at once. A **base** pack adds its bells; a **correction** replaces the base
-   packs above it on its dates; a **Выходной** (muted correction) cancels them.
+   at once. An **Основное** pack adds its bells; a **Коррекция** replaces the
+   Основное packs above it on its dates; a **Выходной** (muted correction) cancels them.
    Packs can be limited to a date range, individual dates and a yearly repeat.
    Nothing is sent to the device until "Отправить" in the bottom bar; the app
    then re-reads the schedule. Import/export (JSON) and the global "Период
    работы" live in the schedule menu.
-6. **Настройки**: ring duration (used for every bell), automatic time sync,
-   device address and token.
+6. **Настройки**: ring duration (1–10 s on the slider, or any value up to
+   60 s via "Своё значение"), automatic time sync, device address, token and
+   a factory reset of the device. Back from Расписание or Настройки returns to
+   Сейчас.
 
 ## Firmware configuration (.env)
 
@@ -380,6 +384,16 @@ curl -s -X POST http://192.168.4.1/settings \
 ```
 
 `ring_default` must be from 1 to 60.
+
+### Factory reset
+
+```bash
+curl -s -X POST http://192.168.4.1/reset
+```
+
+Deletes the schedule and the settings: empty schedule, `auto` mode,
+`ring_default` 5. The DS3231 clock keeps its time. The app offers the same
+action at the bottom of the Settings tab.
 
 ### HTML test page
 

@@ -1,5 +1,6 @@
 package com.belltimer.app.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -105,6 +106,9 @@ fun BellTimerApp(viewModel: AppViewModel) {
                 onBack = { editingPackId = NO_PACK },
             )
         } else {
+            // Back from Schedule or Settings returns to the main tab; only
+            // the main tab lets the system close the app.
+            BackHandler(enabled = tab != Tab.Now) { tab = Tab.Now }
             Scaffold(
                 containerColor = MaterialTheme.colorScheme.background,
                 snackbarHost = { SnackbarHost(snackbarHostState) },

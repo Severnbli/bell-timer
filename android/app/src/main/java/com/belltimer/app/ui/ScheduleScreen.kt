@@ -85,22 +85,67 @@ import com.belltimer.app.data.ResolvedBell
 import com.belltimer.app.data.ScheduleModule
 import com.belltimer.app.data.SchedulePack
 import com.belltimer.app.data.canAddPack
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.material.icons.filled.DragIndicator
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ToggleOff
+import androidx.compose.material.icons.filled.ToggleOn
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.zIndex
+import com.belltimer.app.data.PackWindow
+import kotlin.math.abs
 import java.time.LocalDate
 import java.time.YearMonth
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ScheduleScreen(state: UiState, viewModel: AppViewModel, onOpenPack: (Int) -> Unit) {
     val schedule = state.schedule
+    // The day used for new corrections: the last day the user looked at.
     var selectedKey by rememberSaveable { mutableStateOf(LocalDate.now().toString()) }
     val selected = LocalDate.parse(selectedKey)
+    var daySheet by rememberSaveable { mutableStateOf(false) }
+    var optionsPackId by rememberSaveable { mutableStateOf<Int?>(null) }
     var newPackDialog by remember { mutableStateOf(false) }
     var autoDialog by remember { mutableStateOf(false) }
     val tooManyPacks = stringResource(R.string.error_too_many_packs)
+    val packDeleted = stringResource(R.string.pack_deleted)
+    val copySuffix = stringResource(R.string.pack_copy_suffix)
+    val correctionName = stringResource(R.string.pack_new_correction_name, selected.shortDate())
+    val holidayName = stringResource(R.string.pack_new_holiday_name, selected.shortDate())
 
     fun addPack(pack: SchedulePack) {
+        if (!schedule.canAddPack()) {
+            viewModel.reportMessage(tooManyPacks)
+            return
+        }
         viewModel.updateSchedule(schedule.withPack(pack))
         onOpenPack(pack.id)
     }
+
+    fun addForSelected(mute: Boolean) = addPack(
+        SchedulePack(
+            id = schedule.nextPackId(),
+            name = if (mute) holidayName else correctionName,
+            kind = PackKind.Correction,
+            mute = mute,
+            window = PackWindow(dates = setOf(selected)),
+        ),
+    )
 
     Column(modifier = Modifier.fillMaxSize()) {
         ScheduleHeader(
@@ -118,12 +163,14 @@ fun ScheduleScreen(state: UiState, viewModel: AppViewModel, onOpenPack: (Int) ->
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            WeekStrip(
+            MonthCalendar(
                 schedule = schedule,
-                selected = selected,
-                onSelect = { selectedKey = it.toString() },
+                selected = selected.takeIf { daySheet },
+                onDayClick = {
+                    selectedKey = it.toString()
+                    daySheet = true
+                },
             )
-            DayAgenda(schedule = schedule, date = selected)
 
             SectionTitle(
                 text = stringResource(R.string.packs_title),
@@ -141,28 +188,26 @@ fun ScheduleScreen(state: UiState, viewModel: AppViewModel, onOpenPack: (Int) ->
             if (schedule.packs.isEmpty()) {
                 EmptyPacks(
                     loaded = state.scheduleLoaded,
-                    onCreate = {
-                        addPack(
-                            SchedulePack(
-                                id = schedule.nextPackId(),
-                                name = it,
-                                kind = PackKind.Base,
-                            ),
-                        )
-                    },
+                    onCreate = { addPack(SchedulePack(id = schedule.nextPackId(), name = it)) },
                 )
             } else {
-                schedule.packs.forEachIndexed { index, pack ->
-                    PackCard(
-                        pack = pack,
-                        index = index,
-                        count = schedule.packs.size,
-                        appliesOnSelected = pack.appliesOn(selected),
-                        onOpen = { onOpenPack(pack.id) },
-                        onToggle = { enabled -> viewModel.updateSchedule(schedule.withPack(pack.copy(enabled = enabled))) },
-                        onMove = { delta -> viewModel.updateSchedule(schedule.movePack(pack.id, delta)) },
+                if (schedule.packs.size > 1) {
+                    Text(
+                        text = stringResource(R.string.packs_drag_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                PackList(
+                    packs = schedule.packs,
+                    today = LocalDate.now(),
+                    onClick = { optionsPackId = it.id },
+                    onToggle = { pack, enabled -> viewModel.updateSchedule(schedule.withPack(pack.copy(enabled = enabled))) },
+                    onReorder = { order ->
+                        val byId = schedule.packs.associateBy { it.id }
+                        viewModel.updateSchedule(schedule.copy(packs = order.mapNotNull { byId[it] }))
+                    },
+                )
             }
             OutlinedButton(
                 onClick = {
@@ -185,6 +230,75 @@ fun ScheduleScreen(state: UiState, viewModel: AppViewModel, onOpenPack: (Int) ->
         }
     }
 
+    if (daySheet) {
+        ModalBottomSheet(
+            onDismissRequest = { daySheet = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        ) {
+            Column(
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp)
+                    .padding(bottom = 24.dp),
+            ) {
+                DayAgenda(schedule = schedule, date = selected)
+                Spacer(Modifier.height(16.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SmallTonalButton(stringResource(R.string.day_add_correction), Icons.Default.ContentCopy, {
+                        daySheet = false
+                        addForSelected(mute = false)
+                    })
+                    SmallTonalButton(stringResource(R.string.day_add_holiday), Icons.Default.BeachAccess, {
+                        daySheet = false
+                        addForSelected(mute = true)
+                    })
+                }
+            }
+        }
+    }
+
+    val optionsPack = schedule.packById(optionsPackId)
+    if (optionsPack != null) {
+        val index = schedule.packs.indexOf(optionsPack)
+        PackOptionsSheet(
+            pack = optionsPack,
+            index = index,
+            count = schedule.packs.size,
+            onDismiss = { optionsPackId = null },
+            onEdit = {
+                optionsPackId = null
+                onOpenPack(optionsPack.id)
+            },
+            onToggle = {
+                optionsPackId = null
+                viewModel.updateSchedule(schedule.withPack(optionsPack.copy(enabled = !optionsPack.enabled)))
+            },
+            onDuplicate = {
+                optionsPackId = null
+                if (!schedule.canAddPack()) {
+                    viewModel.reportMessage(tooManyPacks)
+                } else {
+                    val copy = optionsPack.copy(
+                        id = schedule.nextPackId(),
+                        name = "${optionsPack.name} $copySuffix".trim(),
+                    )
+                    val packs = schedule.packs.toMutableList().apply { add(index + 1, copy) }
+                    viewModel.updateSchedule(schedule.copy(packs = packs))
+                }
+            },
+            onMove = { delta ->
+                optionsPackId = null
+                viewModel.updateSchedule(schedule.movePack(optionsPack.id, delta))
+            },
+            onDelete = {
+                optionsPackId = null
+                viewModel.updateSchedule(schedule.withoutPack(optionsPack.id), undoable = true, message = packDeleted)
+            },
+        )
+    } else if (optionsPackId != null) {
+        optionsPackId = null
+    }
+
     if (newPackDialog) {
         NewPackDialog(
             selected = selected,
@@ -197,11 +311,7 @@ fun ScheduleScreen(state: UiState, viewModel: AppViewModel, onOpenPack: (Int) ->
                         name = name,
                         kind = kind,
                         mute = mute,
-                        window = if (date != null) {
-                            com.belltimer.app.data.PackWindow(dates = setOf(date))
-                        } else {
-                            com.belltimer.app.data.PackWindow()
-                        },
+                        window = if (date != null) PackWindow(dates = setOf(date)) else PackWindow(),
                     ),
                 )
             },
@@ -294,61 +404,78 @@ private fun ScheduleHeader(state: UiState, viewModel: AppViewModel, onAutoWindow
     }
 }
 
-// ------------------------------- Week strip --------------------------------
+// -------------------------------- Calendar ---------------------------------
 
 @Composable
-private fun WeekStrip(schedule: BellSchedule, selected: LocalDate, onSelect: (LocalDate) -> Unit) {
-    var monthDialog by remember { mutableStateOf(false) }
-    val monday = selected.minusDays(selected.dayOfWeek.value - 1L)
+private fun MonthCalendar(schedule: BellSchedule, selected: LocalDate?, onDayClick: (LocalDate) -> Unit) {
     val today = LocalDate.now()
+    var monthKey by rememberSaveable { mutableStateOf(YearMonth.from(today).toString()) }
+    val month = YearMonth.parse(monthKey)
 
     AppCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = { onSelect(selected.minusWeeks(1)) }) {
-                Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, stringResource(R.string.week_prev))
+            IconButton(onClick = { monthKey = month.minusMonths(1).toString() }) {
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, stringResource(R.string.month_prev))
             }
-            TextButton(onClick = { monthDialog = true }, modifier = Modifier.weight(1f)) {
-                Icon(Icons.Default.EditCalendar, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text(selected.monthTitle(), style = MaterialTheme.typography.titleMedium)
-            }
-            IconButton(onClick = { onSelect(selected.plusWeeks(1)) }) {
-                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, stringResource(R.string.week_next))
+            Text(
+                text = month.atDay(1).monthTitle(),
+                style = MaterialTheme.typography.titleMedium,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(onClick = { monthKey = month.plusMonths(1).toString() }) {
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, stringResource(R.string.month_next))
             }
         }
-        Spacer(Modifier.height(4.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            for (offset in 0..6) {
-                val date = monday.plusDays(offset.toLong())
-                DayCell(
-                    date = date,
-                    kind = schedule.dayKind(date),
-                    selected = date == selected,
-                    today = date == today,
-                    showWeekday = true,
-                    onClick = { onSelect(date) },
+        Row(modifier = Modifier.padding(top = 4.dp, bottom = 4.dp)) {
+            for (day in 1..7) {
+                Text(
+                    text = weekdayShort(day),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (day >= 6) AppColors.extra.correction else MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
                     modifier = Modifier.weight(1f),
                 )
             }
         }
-        if (selected != today) {
+        val leading = month.atDay(1).dayOfWeek.value - 1
+        val rows = (leading + month.lengthOfMonth() + 6) / 7
+        for (row in 0 until rows) {
+            Row {
+                for (col in 0 until 7) {
+                    val day = row * 7 + col - leading + 1
+                    Box(modifier = Modifier.weight(1f).aspectRatio(0.85f)) {
+                        if (day in 1..month.lengthOfMonth()) {
+                            val date = month.atDay(day)
+                            DayCell(
+                                date = date,
+                                kind = schedule.dayKind(date),
+                                selected = date == selected,
+                                today = date == today,
+                                past = date.isBefore(today),
+                                onClick = { onDayClick(date) },
+                                modifier = Modifier.fillMaxSize().padding(2.dp),
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        if (month != YearMonth.from(today)) {
             TextButton(
-                onClick = { onSelect(today) },
+                onClick = { monthKey = YearMonth.from(today).toString() },
                 modifier = Modifier.align(Alignment.CenterHorizontally),
             ) { Text(stringResource(R.string.week_today)) }
         }
         DayKindLegend()
-    }
-
-    if (monthDialog) {
-        MonthDialog(
-            schedule = schedule,
-            initial = selected,
-            onDismiss = { monthDialog = false },
-            onSelect = {
-                monthDialog = false
-                onSelect(it)
-            },
+        Text(
+            text = stringResource(R.string.calendar_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 4.dp),
         )
     }
 }
@@ -367,7 +494,7 @@ private fun DayCell(
     kind: DayKind,
     selected: Boolean,
     today: Boolean,
-    showWeekday: Boolean,
+    past: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -375,28 +502,28 @@ private fun DayCell(
     val dot = dayKindColor(kind)
     Surface(
         onClick = onClick,
-        shape = MaterialTheme.shapes.medium,
-        color = if (selected) colors.primary else Color.Transparent,
-        contentColor = if (selected) colors.onPrimary else colors.onSurface,
-        border = if (today && !selected) BorderStroke(1.5.dp, colors.primary) else null,
-        modifier = modifier,
+        shape = MaterialTheme.shapes.small,
+        color = when {
+            selected -> colors.primary
+            today -> colors.primaryContainer
+            else -> Color.Transparent
+        },
+        contentColor = when {
+            selected -> colors.onPrimary
+            today -> colors.onPrimaryContainer
+            else -> colors.onSurface
+        },
+        modifier = modifier.alpha(if (past && !selected && !today) 0.45f else 1f),
     ) {
         Column(
-            modifier = Modifier.padding(vertical = 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
         ) {
-            if (showWeekday) {
-                Text(
-                    text = weekdayShort(date.dayOfWeek.value),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = if (selected) colors.onPrimary else colors.onSurfaceVariant,
-                )
-            }
             Text(
                 text = date.dayOfMonth.toString(),
-                style = MaterialTheme.typography.titleMedium.merge(Tabular),
+                style = MaterialTheme.typography.bodyLarge.merge(Tabular),
             )
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(3.dp))
             Box(
                 modifier = Modifier
                     .size(6.dp)
@@ -443,78 +570,6 @@ private fun LegendDot(color: Color, label: String) {
     }
 }
 
-@Composable
-private fun MonthDialog(
-    schedule: BellSchedule,
-    initial: LocalDate,
-    onDismiss: () -> Unit,
-    onSelect: (LocalDate) -> Unit,
-) {
-    var monthKey by rememberSaveable { mutableStateOf(YearMonth.from(initial).toString()) }
-    val month = YearMonth.parse(monthKey)
-    val today = LocalDate.now()
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = { TextButton(onClick = { onSelect(today) }) { Text(stringResource(R.string.week_today)) } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
-        title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { monthKey = month.minusMonths(1).toString() }) {
-                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, stringResource(R.string.month_prev))
-                }
-                Text(
-                    text = month.atDay(1).monthTitle(),
-                    style = MaterialTheme.typography.titleMedium,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.weight(1f),
-                )
-                IconButton(onClick = { monthKey = month.plusMonths(1).toString() }) {
-                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, stringResource(R.string.month_next))
-                }
-            }
-        },
-        text = {
-            Column {
-                Row {
-                    for (day in 1..7) {
-                        Text(
-                            text = weekdayShort(day),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                }
-                val leading = month.atDay(1).dayOfWeek.value - 1
-                val rows = (leading + month.lengthOfMonth() + 6) / 7
-                for (row in 0 until rows) {
-                    Row {
-                        for (col in 0 until 7) {
-                            val day = row * 7 + col - leading + 1
-                            Box(modifier = Modifier.weight(1f).aspectRatio(0.8f)) {
-                                if (day in 1..month.lengthOfMonth()) {
-                                    val date = month.atDay(day)
-                                    DayCell(
-                                        date = date,
-                                        kind = schedule.dayKind(date),
-                                        selected = date == initial,
-                                        today = date == today,
-                                        showWeekday = false,
-                                        onClick = { onSelect(date) },
-                                        modifier = Modifier.fillMaxSize().padding(1.dp),
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-                DayKindLegend()
-            }
-        },
-    )
-}
-
 // ------------------------------- Day agenda --------------------------------
 
 /** Bells of one module on one day, shown as a single timeline item. */
@@ -536,10 +591,10 @@ private fun DayAgenda(schedule: BellSchedule, date: LocalDate) {
     val items = remember(bells) { bells.toAgenda() }
     val kind = remember(schedule, date) { schedule.dayKind(date) }
 
-    AppCard {
+    Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(date.longDay(), style = MaterialTheme.typography.titleMedium)
+                Text(date.longDay(), style = MaterialTheme.typography.titleLarge)
                 Text(
                     text = when {
                         !schedule.auto.allows(date) -> stringResource(R.string.day_outside_auto)
@@ -578,7 +633,7 @@ private fun DayAgenda(schedule: BellSchedule, date: LocalDate) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            return@AppCard
+            return@Column
         }
         Spacer(Modifier.height(12.dp))
         val now = LocalDate.now()
@@ -724,28 +779,136 @@ private fun EmptyPacks(loaded: Boolean, onCreate: (String) -> Unit) {
     }
 }
 
+/**
+ * The pack list. A tap opens the pack's options; a long press on the card (or
+ * a drag on its handle) moves it, and the new order is applied on release.
+ */
+@Composable
+private fun PackList(
+    packs: List<SchedulePack>,
+    today: LocalDate,
+    onClick: (SchedulePack) -> Unit,
+    onToggle: (SchedulePack, Boolean) -> Unit,
+    onReorder: (List<Int>) -> Unit,
+) {
+    val currentPacks by rememberUpdatedState(packs)
+    val currentOnReorder by rememberUpdatedState(onReorder)
+    var order by remember(packs) { mutableStateOf(packs.map { it.id }) }
+    var draggedId by remember { mutableStateOf<Int?>(null) }
+    var dragOffset by remember { mutableFloatStateOf(0f) }
+    val heights = remember { mutableStateMapOf<Int, Int>() }
+    val gapPx = with(LocalDensity.current) { PACK_GAP.toPx() }
+    val haptics = LocalHapticFeedback.current
+    val byId = packs.associateBy { it.id }
+
+    fun start(id: Int) {
+        draggedId = id
+        dragOffset = 0f
+        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+    }
+
+    fun drag(delta: Float) {
+        val id = draggedId ?: return
+        dragOffset += delta
+        val index = order.indexOf(id)
+        val neighbour = when {
+            dragOffset > 0 && index < order.lastIndex -> index + 1
+            dragOffset < 0 && index > 0 -> index - 1
+            else -> return
+        }
+        val step = (heights[order[neighbour]] ?: return) + gapPx
+        if (abs(dragOffset) < step / 2) return
+        order = order.toMutableList().apply {
+            this[index] = this[neighbour]
+            this[neighbour] = id
+        }
+        dragOffset -= if (neighbour > index) step else -step
+        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+    }
+
+    fun finish() {
+        draggedId = null
+        dragOffset = 0f
+        if (order != currentPacks.map { it.id }) currentOnReorder(order)
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(PACK_GAP)) {
+        for ((index, id) in order.withIndex()) {
+            val pack = byId[id] ?: continue
+            key(id) {
+                val dragging = draggedId == id
+                val dragModifier = Modifier.pointerInput(id) {
+                    detectDragGesturesAfterLongPress(
+                        onDragStart = { start(id) },
+                        onDrag = { change, amount ->
+                            change.consume()
+                            drag(amount.y)
+                        },
+                        onDragEnd = { finish() },
+                        onDragCancel = { finish() },
+                    )
+                }
+                val handleModifier = Modifier.pointerInput(id) {
+                    detectDragGestures(
+                        onDragStart = { start(id) },
+                        onDrag = { change, amount ->
+                            change.consume()
+                            drag(amount.y)
+                        },
+                        onDragEnd = { finish() },
+                        onDragCancel = { finish() },
+                    )
+                }
+                PackCard(
+                    pack = pack,
+                    position = index + 1,
+                    appliesToday = pack.appliesOn(today),
+                    dragging = dragging,
+                    onClick = { onClick(pack) },
+                    onToggle = { onToggle(pack, it) },
+                    dragHandle = handleModifier,
+                    modifier = dragModifier
+                        .onSizeChanged { heights[id] = it.height }
+                        .zIndex(if (dragging) 1f else 0f)
+                        .graphicsLayer {
+                            translationY = if (dragging) dragOffset else 0f
+                            val scale = if (dragging) 1.02f else 1f
+                            scaleX = scale
+                            scaleY = scale
+                        },
+                )
+            }
+        }
+    }
+}
+
+private val PACK_GAP = 12.dp
+
 @Composable
 private fun PackCard(
     pack: SchedulePack,
-    index: Int,
-    count: Int,
-    appliesOnSelected: Boolean,
-    onOpen: () -> Unit,
+    position: Int,
+    appliesToday: Boolean,
+    dragging: Boolean,
+    onClick: () -> Unit,
     onToggle: (Boolean) -> Unit,
-    onMove: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+    dragHandle: Modifier = Modifier,
 ) {
     val accent = AppColors.pack(pack.kind)
-    var menu by remember { mutableStateOf(false) }
     Surface(
-        onClick = onOpen,
+        onClick = onClick,
         shape = MaterialTheme.shapes.large,
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        color = if (dragging) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerLow,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
-        modifier = Modifier
-            .fillMaxWidth()
-            .alpha(if (pack.enabled) 1f else 0.6f),
+        shadowElevation = if (dragging) 8.dp else 0.dp,
+        modifier = modifier.fillMaxWidth(),
     ) {
-        Row(modifier = Modifier.height(IntrinsicSize.Min)) {
+        Row(
+            modifier = Modifier
+                .height(IntrinsicSize.Min)
+                .alpha(if (pack.enabled) 1f else 0.6f),
+        ) {
             Box(
                 modifier = Modifier
                     .width(6.dp)
@@ -755,7 +918,7 @@ private fun PackCard(
             Column(modifier = Modifier.weight(1f).padding(start = 14.dp, top = 12.dp, bottom = 12.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = "${index + 1}",
+                        text = "$position",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -767,7 +930,7 @@ private fun PackCard(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false),
                     )
-                    if (appliesOnSelected && pack.enabled) {
+                    if (appliesToday && pack.enabled) {
                         Spacer(Modifier.width(8.dp))
                         Box(
                             modifier = Modifier
@@ -785,40 +948,98 @@ private fun PackCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (pack.modules.isNotEmpty()) {
+                if (pack.modules.isNotEmpty() && !pack.mute) {
                     Spacer(Modifier.height(8.dp))
                     ModuleStrip(pack.modules)
                 }
             }
-            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(8.dp)) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .padding(8.dp),
+            ) {
                 Switch(checked = pack.enabled, onCheckedChange = onToggle)
-                Box {
-                    IconButton(onClick = { menu = true }) {
-                        Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.more))
-                    }
-                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.pack_move_up)) },
-                            leadingIcon = { Icon(Icons.Default.ArrowUpward, null) },
-                            enabled = index > 0,
-                            onClick = {
-                                menu = false
-                                onMove(-1)
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.pack_move_down)) },
-                            leadingIcon = { Icon(Icons.Default.ArrowDownward, null) },
-                            enabled = index < count - 1,
-                            onClick = {
-                                menu = false
-                                onMove(1)
-                            },
-                        )
-                    }
-                }
+                Icon(
+                    Icons.Default.DragIndicator,
+                    contentDescription = stringResource(R.string.pack_drag),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = dragHandle
+                        .padding(4.dp)
+                        .size(28.dp),
+                )
             }
         }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PackOptionsSheet(
+    pack: SchedulePack,
+    index: Int,
+    count: Int,
+    onDismiss: () -> Unit,
+    onEdit: () -> Unit,
+    onToggle: () -> Unit,
+    onDuplicate: () -> Unit,
+    onMove: (Int) -> Unit,
+    onDelete: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(modifier = Modifier.padding(bottom = 24.dp)) {
+            Column(modifier = Modifier.padding(horizontal = 24.dp)) {
+                Text(pack.displayName(), style = MaterialTheme.typography.titleLarge)
+                Spacer(Modifier.height(6.dp))
+                PackKindChip(pack)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = packSummary(pack),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            ThinDivider()
+            OptionItem(Icons.Default.Edit, stringResource(R.string.pack_open), onClick = onEdit)
+            OptionItem(
+                if (pack.enabled) Icons.Default.ToggleOff else Icons.Default.ToggleOn,
+                stringResource(if (pack.enabled) R.string.pack_disable else R.string.pack_enable),
+                onClick = onToggle,
+            )
+            OptionItem(Icons.Default.ContentCopy, stringResource(R.string.pack_duplicate), onClick = onDuplicate)
+            OptionItem(Icons.Default.ArrowUpward, stringResource(R.string.pack_move_up), enabled = index > 0) { onMove(-1) }
+            OptionItem(Icons.Default.ArrowDownward, stringResource(R.string.pack_move_down), enabled = index < count - 1) { onMove(1) }
+            OptionItem(
+                Icons.Default.Delete,
+                stringResource(R.string.pack_delete),
+                color = MaterialTheme.colorScheme.error,
+                onClick = onDelete,
+            )
+        }
+    }
+}
+
+@Composable
+private fun OptionItem(
+    icon: ImageVector,
+    text: String,
+    enabled: Boolean = true,
+    color: Color = MaterialTheme.colorScheme.onSurface,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled, onClick = onClick)
+            .alpha(if (enabled) 1f else 0.38f)
+            .padding(horizontal = 24.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, tint = color)
+        Spacer(Modifier.width(16.dp))
+        Text(text, style = MaterialTheme.typography.bodyLarge, color = color)
     }
 }
 
