@@ -192,6 +192,7 @@ uint32_t lastScheduleMinute = 0xFFFFFFFFUL;
 
 // LED blink timings. The phase is derived from millis(), so no state is kept.
 const uint32_t LED_OK_BLINK_MS = 500;    // green, 1 Hz
+const uint32_t LED_RING_BLINK_MS = 100;  // green, 5 Hz while ringing
 const uint32_t LED_FAULT_BLINK_MS = 250; // red, 2 Hz
 
 // --------------------------- Small helpers --------------------------------
@@ -1206,7 +1207,7 @@ inline bool blinkPhase(uint32_t nowMs, uint32_t halfPeriodMs) {
 }
 
 // Colour mapping on the KY-029 dual-colour module:
-//   steady green  - the bell is ringing (nothing blinks while it sounds)
+//   green 5 Hz    - the bell is ringing
 //   green 1 Hz    - idle and healthy
 //   steady red    - warning: time not set, so the schedule will not fire
 //   red 2 Hz      - critical error: RTC, storage or access point failed
@@ -1214,7 +1215,7 @@ void updateLed() {
   uint32_t nowMs = millis();
 
   if (ringing) {
-    setLed(true, false);
+    setLed(blinkPhase(nowMs, LED_RING_BLINK_MS), false);
     return;
   }
 

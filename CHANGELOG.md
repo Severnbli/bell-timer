@@ -22,6 +22,7 @@
   `POST /time`, stored in flash).
 * A bell still fires within 5 s of its minute if the loop was busy at second 0;
   a scheduled bell extends a shorter manual ring instead of being skipped.
+* While the bell rings the LED blinks green at 5 Hz instead of staying lit.
 * `POST /reset` deletes the schedule and settings (factory reset).
 * The built-in HTML page was redesigned and can sync the time from the browser.
 

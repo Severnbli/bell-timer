@@ -441,7 +441,7 @@ pin. It is wired to two GPIOs, so the colours below are produced natively.
 | Colour | Meaning |
 | --- | --- |
 | Green, 1 Hz blink (500 ms on/off) | Normal, no errors |
-| Steady green | The bell is ringing (nothing blinks while it sounds) |
+| Green, 5 Hz blink (100 ms on/off) | The bell is ringing |
 | Red, 2 Hz blink (250 ms on/off) | Critical error: `rtc_not_found`, `storage_error` or `wifi_ap_error` |
 | Steady red | Warning: `time_not_set` - manual ring works, but the schedule cannot fire |
 
@@ -481,7 +481,7 @@ mode and `ring_default` and restores them on exit.
    `rtc_not_found`.
 6. Press "Синхронизировать с телефоном"; `time_not_set` clears, the clock
    card shows "Совпадает со временем телефона" and `synced` is set.
-7. Ring for 3 s and press Stop: relay clicks on/off and the LED is steady green
+7. Ring for 3 s and press Stop: relay clicks on/off and the LED blinks green fast
    while ringing.
 8. Add a lesson starting one minute in the future with a length of 2 minutes;
    the relay clicks at the start and at the end.
