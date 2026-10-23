@@ -34,7 +34,9 @@ via `OPTIONS`.
 | `GET /schedule` | returns the v5 document with limits |
 | `POST /schedule` | accepts v5, and v4 for compatibility |
 | `GET /schedule/day?date=YYYY-MM-DD` | resolved bell list for one date |
-| `POST /reset` | factory reset |
+| `POST /reset` | factory reset, optionally including the network |
+| `GET /network` | access point name and whether a password / token is set |
+| `POST /network` | change the access point name, password and API token |
 
 ### `GET /status`
 
@@ -55,7 +57,8 @@ via `OPTIONS`.
   "auto": {"start": "2026-09-01", "stop": "2027-05-31"},
   "errors": [],
   "fw": "2.0.0",
-  "api": 5
+  "api": 5,
+  "ssid": "BellTimer"
 }
 ```
 
@@ -80,8 +83,39 @@ latency of the phone. The minute in which the time was set never rings.
 Factory reset. Stops a running bell, deletes `/schedule.json` and
 `/settings.json` and returns to the defaults: empty schedule, `auto` mode,
 `ring_default` 5, no `synced`. The clock is kept (it lives in the DS3231).
-Returns `{"ok": true}`, or `500 storage_error` when a file could not be
-deleted.
+
+With the body `{"network": true}` it also deletes `/network.json`, so the
+access point name, password and token return to the build defaults from
+`.env`; the access point then restarts 1.5 s after the response.
+
+Returns `{"ok": true, "restart": false}`, or `500 storage_error` when a file
+could not be deleted.
+
+### `GET /network` and `POST /network`
+
+```json
+{"ssid": "BellTimer", "channel": 6, "open": false, "token_set": true}
+```
+
+The password and the token are never returned.
+
+```json
+{"ssid": "School-Bell", "password": "new-secret", "token": "abc123"}
+```
+
+Every field is optional and only the fields present change:
+
+* `ssid` – 1–32 bytes.
+* `password` – 8–63 characters; `""` makes the network open.
+* `token` – up to 64 printable ASCII characters without spaces; `""` turns
+  authentication off. The new token is required from the next request on.
+
+The values are stored in `/network.json` and survive a reboot; a missing or
+damaged file falls back to the build defaults. When the name or the password
+changes, the device answers `{"ok": true, "ssid": "...", "restart": true}` and
+restarts the access point 1.5 s later, so every client has to join the new
+network. Errors: `invalid_ssid`, `invalid_password`, `invalid_token`,
+`500 storage_error`.
 
 ### `GET /schedule/day?date=YYYY-MM-DD`
 
@@ -226,6 +260,8 @@ This mirrors `BellSchedule.resolveDay(date)` in
 | `too_many_pack_dates` | More than 24 individual dates in one pack |
 | `invalid_date` | `/schedule/day` without a valid `date` |
 | `invalid_sec`, `invalid_mode`, `invalid_datetime`, `invalid_ring_default` | unchanged |
+| `invalid_ssid`, `invalid_password`, `invalid_token` | `POST /network` values out of range |
+| `invalid_request` | `POST /reset` with a malformed body |
 | `storage_error` | 500, flash write failed |
 | `rtc_not_found` | 503, `/time` without a DS3231 |
 | `unauthorized` | 401, wrong or missing token |
@@ -236,5 +272,7 @@ This mirrors `BellSchedule.resolveDay(date)` in
 * `/schedule.json` holds the v5 document, written with `writeFileAtomic()`
   (temp file, then rename). A failed save keeps the previous schedule.
 * `/settings.json` holds `ring_default`, `mode` and `synced`.
+* `/network.json` holds `ssid`, `password` and `token` once they were changed
+  from the app; without it the build defaults from `.env` apply.
 * `POST /schedule` validates into scratch buffers and only then commits, so a
   rejected document never touches the live schedule.

@@ -36,9 +36,11 @@ const uint8_t API_VERSION = 5;
 
 // ----------------------------- Configuration ------------------------------
 
-const char *const AP_SSID = BELLTIMER_AP_SSID;
-const char *const AP_PASSWORD = BELLTIMER_AP_PASSWORD;
-const char *const API_TOKEN = BELLTIMER_API_TOKEN;  // Empty disables X-Token.
+// Build-time defaults. The app can change the access point name, password and
+// API token at run time (POST /network); they are kept in /network.json.
+const char *const DEFAULT_AP_SSID = BELLTIMER_AP_SSID;
+const char *const DEFAULT_AP_PASSWORD = BELLTIMER_AP_PASSWORD;
+const char *const DEFAULT_API_TOKEN = BELLTIMER_API_TOKEN;  // Empty disables X-Token.
 const uint8_t AP_CHANNEL = BELLTIMER_AP_CHANNEL;
 const uint8_t AP_MAX_CLIENTS = BELLTIMER_AP_MAX_CLIENTS;
 
@@ -82,6 +84,14 @@ const uint8_t ALL_DAYS_MASK = 0x7F;    // bit 0 = Monday ... bit 6 = Sunday
 
 const char *const SCHEDULE_FILE = "/schedule.json";
 const char *const SETTINGS_FILE = "/settings.json";
+const char *const NETWORK_FILE = "/network.json";
+const size_t MAX_SSID_BYTES = 32;
+const size_t MIN_PASSWORD_BYTES = 8;
+const size_t MAX_PASSWORD_BYTES = 63;
+const size_t MAX_TOKEN_BYTES = 64;
+// Delay between answering POST /network and restarting the access point, so
+// the response reaches the phone before its Wi-Fi drops.
+const uint32_t AP_RESTART_DELAY_MS = 1500;
 
 const uint32_t RTC_POLL_MS = 250;
 const uint32_t RTC_RETRY_MS = 2000;
@@ -145,6 +155,12 @@ bool storageOk = false;
 bool rtcOk = false;
 bool rtcLostPower = true;
 bool apOk = false;
+
+String apSsid = DEFAULT_AP_SSID;
+String apPassword = DEFAULT_AP_PASSWORD;
+String apiToken = DEFAULT_API_TOKEN;
+bool apRestartPending = false;
+uint32_t apRestartAtMs = 0;
 
 uint8_t ringDefault = DEFAULT_RING_SEC;
 String currentMode = "auto";
@@ -912,9 +928,62 @@ bool saveScheduleToFlash() {
   return ok;
 }
 
+// ------------------------------ Network ----------------------------------
+
+bool validSsid(const String &value) {
+  return value.length() >= 1 && value.length() <= MAX_SSID_BYTES;
+}
+
+// Empty means an open network; WPA2 needs 8..63 characters.
+bool validPassword(const String &value) {
+  return value.length() == 0 ||
+         (value.length() >= MIN_PASSWORD_BYTES && value.length() <= MAX_PASSWORD_BYTES);
+}
+
+// Printable ASCII without spaces, so it survives an HTTP header unchanged.
+bool validToken(const String &value) {
+  if (value.length() > MAX_TOKEN_BYTES) return false;
+  for (size_t i = 0; i < value.length(); ++i) {
+    if (value[i] < 0x21 || value[i] > 0x7E) return false;
+  }
+  return true;
+}
+
+void loadNetworkFromFlash() {
+  apSsid = DEFAULT_AP_SSID;
+  apPassword = DEFAULT_AP_PASSWORD;
+  apiToken = DEFAULT_API_TOKEN;
+  if (!storageOk) return;
+  File in = LittleFS.open(NETWORK_FILE, "r");
+  if (!in) return;
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, in);
+  in.close();
+  if (err) return;
+  String ssid = doc["ssid"] | DEFAULT_AP_SSID;
+  String password = doc["password"] | DEFAULT_AP_PASSWORD;
+  String token = doc["token"] | DEFAULT_API_TOKEN;
+  // A damaged file must never lock the user out: fall back to the defaults.
+  if (!validSsid(ssid) || !validPassword(password) || !validToken(token)) return;
+  apSsid = ssid;
+  apPassword = password;
+  apiToken = token;
+}
+
+bool saveNetworkToFlash() {
+  JsonDocument doc;
+  doc["ssid"] = apSsid;
+  doc["password"] = apPassword;
+  doc["token"] = apiToken;
+  String payload;
+  serializeJson(doc, payload);
+  return storageOk && writeFileAtomic(NETWORK_FILE, payload);
+}
+
 void tryMountStorage() {
   storageOk = LittleFS.begin(true);
   if (storageOk) {
+    loadNetworkFromFlash();
     loadSettingsFromFlash();
     loadScheduleFromFlash();
     storageRetryPending = false;
@@ -1241,13 +1310,20 @@ void startAccessPoint() {
   IPAddress gateway(192, 168, 4, 1);
   IPAddress subnet(255, 255, 255, 0);
   WiFi.softAPConfig(ip, gateway, subnet);
-  apOk = WiFi.softAP(AP_SSID, AP_PASSWORD, AP_CHANNEL, 0, AP_MAX_CLIENTS);
+  const char *password = apPassword.length() > 0 ? apPassword.c_str() : nullptr;
+  apOk = WiFi.softAP(apSsid.c_str(), password, AP_CHANNEL, 0, AP_MAX_CLIENTS);
   apLastRetryMs = millis();
   apLastIpCheckMs = apLastRetryMs;
 }
 
 void handleApTimers() {
   uint32_t nowMs = millis();
+  if (apRestartPending && static_cast<int32_t>(nowMs - apRestartAtMs) >= 0) {
+    apRestartPending = false;
+    WiFi.softAPdisconnect(true);
+    startAccessPoint();
+    return;
+  }
   if (!apOk && nowMs - apLastRetryMs >= AP_RETRY_MS) {
     startAccessPoint();
     return;
@@ -1283,11 +1359,11 @@ void sendError(int code, const char *errorCode) {
 }
 
 bool tokenAccepted() {
-  if (API_TOKEN[0] == '\0') return true;
-  if (server.hasHeader("X-Token") && server.header("X-Token") == API_TOKEN) {
+  if (apiToken.length() == 0) return true;
+  if (server.hasHeader("X-Token") && server.header("X-Token") == apiToken) {
     return true;
   }
-  if (server.hasArg("token") && server.arg("token") == API_TOKEN) return true;
+  if (server.hasArg("token") && server.arg("token") == apiToken) return true;
   return false;
 }
 
@@ -1372,6 +1448,7 @@ void handleGetStatus() {
   if (!apOk) errors.add("wifi_ap_error");
   doc["fw"] = FW_VERSION;
   doc["api"] = API_VERSION;
+  doc["ssid"] = apSsid;
   sendDocument(200, doc);
 }
 
@@ -1567,14 +1644,37 @@ void handlePostSchedule() {
 }
 
 // Factory reset: forgets the schedule, the mode, the ring duration and the
-// last sync time. The clock keeps running; it lives in the DS3231.
+// last sync time. With {"network": true} the access point and the token go
+// back to the build defaults too. The clock keeps running; it lives in the
+// DS3231.
 void handlePostReset() {
   if (!requireToken()) return;
+  bool network = false;
+  if (server.hasArg("plain") && server.arg("plain").length() > 0) {
+    JsonDocument doc;
+    if (deserializeJson(doc, server.arg("plain")) ||
+        !parseBoolField(doc["network"], false, network)) {
+      sendError(400, "invalid_request");
+      return;
+    }
+  }
   stopRing();
   bool ok = storageOk;
   if (ok) {
     if (LittleFS.exists(SCHEDULE_FILE) && !LittleFS.remove(SCHEDULE_FILE)) ok = false;
     if (LittleFS.exists(SETTINGS_FILE) && !LittleFS.remove(SETTINGS_FILE)) ok = false;
+    if (network && LittleFS.exists(NETWORK_FILE) && !LittleFS.remove(NETWORK_FILE)) ok = false;
+  }
+  bool restart = false;
+  if (network) {
+    String oldSsid = apSsid;
+    String oldPassword = apPassword;
+    loadNetworkFromFlash();
+    restart = apSsid != oldSsid || apPassword != oldPassword;
+  }
+  if (restart) {
+    apRestartPending = true;
+    apRestartAtMs = millis() + AP_RESTART_DELAY_MS;
   }
   loadSettingsFromFlash();
   moduleCount = 0;
@@ -1588,6 +1688,98 @@ void handlePostReset() {
   }
   JsonDocument out;
   out["ok"] = true;
+  out["restart"] = restart;
+  sendDocument(200, out);
+}
+
+void handleGetNetwork() {
+  if (!requireToken()) return;
+  JsonDocument doc;
+  doc["ssid"] = apSsid;
+  doc["channel"] = AP_CHANNEL;
+  doc["open"] = apPassword.length() == 0;
+  doc["token_set"] = apiToken.length() > 0;
+  sendDocument(200, doc);
+}
+
+// Changes the access point name, its password and the API token. Every field
+// is optional; "password": "" makes the network open and "token": "" turns
+// authentication off. The access point restarts shortly after the response
+// when the name or the password changed.
+void handlePostNetwork() {
+  if (!requireToken()) return;
+  JsonDocument doc;
+  const char *errorCode = nullptr;
+  if (!readJsonBody(doc, errorCode)) {
+    sendError(400, errorCode);
+    return;
+  }
+  String ssid = apSsid;
+  String password = apPassword;
+  String token = apiToken;
+  JsonVariant ssidValue = doc["ssid"];
+  if (!ssidValue.isNull()) {
+    if (!ssidValue.is<const char *>()) {
+      sendError(400, "invalid_ssid");
+      return;
+    }
+    ssid = String(ssidValue.as<const char *>());
+  }
+  JsonVariant passwordValue = doc["password"];
+  if (!passwordValue.isNull()) {
+    if (!passwordValue.is<const char *>()) {
+      sendError(400, "invalid_password");
+      return;
+    }
+    password = String(passwordValue.as<const char *>());
+  }
+  JsonVariant tokenValue = doc["token"];
+  if (!tokenValue.isNull()) {
+    if (!tokenValue.is<const char *>()) {
+      sendError(400, "invalid_token");
+      return;
+    }
+    token = String(tokenValue.as<const char *>());
+  }
+  if (!validSsid(ssid)) {
+    sendError(400, "invalid_ssid");
+    return;
+  }
+  if (!validPassword(password)) {
+    sendError(400, "invalid_password");
+    return;
+  }
+  if (!validToken(token)) {
+    sendError(400, "invalid_token");
+    return;
+  }
+
+  bool restart = ssid != apSsid || password != apPassword;
+  bool changed = restart || token != apiToken;
+  if (changed) {
+    String oldSsid = apSsid;
+    String oldPassword = apPassword;
+    String oldToken = apiToken;
+    apSsid = ssid;
+    apPassword = password;
+    apiToken = token;
+    if (!saveNetworkToFlash()) {
+      apSsid = oldSsid;
+      apPassword = oldPassword;
+      apiToken = oldToken;
+      sendError(500, "storage_error");
+      return;
+    }
+  }
+  if (restart) {
+    apRestartPending = true;
+    apRestartAtMs = millis() + AP_RESTART_DELAY_MS;
+  }
+
+  JsonDocument out;
+  out["ok"] = true;
+  out["ssid"] = apSsid;
+  out["restart"] = restart;
   sendDocument(200, out);
 }
 
@@ -1685,7 +1877,7 @@ void setupHttpRoutes() {
 
   const char *paths[] = {"/",     "/status", "/ring",    "/stop",
                          "/mode", "/time",   "/schedule", "/settings",
-                         "/schedule/day", "/reset"};
+                         "/schedule/day", "/reset",  "/network"};
   for (const char *path : paths) {
     server.on(path, HTTP_OPTIONS, handleOptions);
   }
@@ -1703,6 +1895,8 @@ void setupHttpRoutes() {
   server.on("/settings", HTTP_GET, handleGetSettings);
   server.on("/settings", HTTP_POST, handlePostSettings);
   server.on("/reset", HTTP_POST, handlePostReset);
+  server.on("/network", HTTP_GET, handleGetNetwork);
+  server.on("/network", HTTP_POST, handlePostNetwork);
   server.onNotFound(handleNotFound);
 }
 

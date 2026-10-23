@@ -319,6 +319,30 @@ code="$(request GET /status "" "${WORK_DIR}/status_reset.json")"
 expect_contains "${WORK_DIR}/status_reset.json" '"mode":"auto"' "reset restores auto mode"
 expect_contains "${WORK_DIR}/status_reset.json" '"synced":null' "reset forgets the last sync"
 
+# --- Network --------------------------------------------------------------
+code="$(request GET /network "" "${WORK_DIR}/network.json")"
+expect_code 200 "${code}" "GET /network" "${WORK_DIR}/network.json"
+expect_contains "${WORK_DIR}/network.json" '"ssid"' "network reports the access point name"
+if grep -qF '"password"' "${WORK_DIR}/network.json"; then
+    echo "FAIL: GET /network must not return the password" >&2
+    exit 1
+fi
+PASS_COUNT=$((PASS_COUNT + 1))
+echo "PASS: GET /network hides the password"
+
+# An empty body changes nothing, so the access point does not restart.
+code="$(request POST /network '{}' "${WORK_DIR}/network_noop.json")"
+expect_code 200 "${code}" "POST /network without changes" "${WORK_DIR}/network_noop.json"
+expect_contains "${WORK_DIR}/network_noop.json" '"restart":false' "unchanged network does not restart"
+
+for bad in '{"ssid":""}:invalid_ssid' '{"password":"short"}:invalid_password' '{"token":"has space"}:invalid_token'; do
+    body="${bad%:*}"
+    error="${bad##*:}"
+    code="$(request POST /network "${body}" "${WORK_DIR}/network_bad.json")"
+    expect_code 400 "${code}" "POST /network rejects ${body}" "${WORK_DIR}/network_bad.json"
+    expect_contains "${WORK_DIR}/network_bad.json" "\"error\":\"${error}\"" "${error} error code"
+done
+
 # --- HTML page and 404 ----------------------------------------------------
 code="$(request GET / "" "${WORK_DIR}/index.html")"
 expect_code 200 "${code}" "GET /" "${WORK_DIR}/index.html"
