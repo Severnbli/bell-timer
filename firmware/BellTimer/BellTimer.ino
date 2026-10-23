@@ -1678,6 +1678,10 @@ void handleNotFound() { sendError(404, "not_found"); }
 
 void setupHttpRoutes() {
   server.enableCORS(true);
+  // WebServer keeps only the request headers it is told to collect; without
+  // this the X-Token header is dropped and only ?token= would work.
+  static const char *HEADER_KEYS[] = {"X-Token"};
+  server.collectHeaders(HEADER_KEYS, 1);
 
   const char *paths[] = {"/",     "/status", "/ring",    "/stop",
                          "/mode", "/time",   "/schedule", "/settings",
