@@ -28,10 +28,11 @@
 
 namespace {
 
-const char *const FW_VERSION = "1.2.0";
+const char *const FW_VERSION = "1.3.0";
 
-// API level reported by GET /status. Level 3 adds per-date overrides.
-const uint8_t API_VERSION = 3;
+// API level reported by GET /status. Level 4 replaces groups/overrides with
+// ordered packs (base packs plus corrections).
+const uint8_t API_VERSION = 4;
 
 // ----------------------------- Configuration ------------------------------
 
@@ -51,19 +52,20 @@ const bool LED_ACTIVE_LOW = BELLTIMER_LED_ACTIVE_LOW;
 const uint8_t PIN_I2C_SDA = BELLTIMER_PIN_I2C_SDA;
 const uint8_t PIN_I2C_SCL = BELLTIMER_PIN_I2C_SCL;
 
-// A schedule is a set of named groups. Every group owns a list of bells and
-// repeats on the weekdays selected for the group. A per-date override can mute
-// a day, replace its bells or add extra bells on top. Auto mode can be limited
-// to a date range. The limits below are mirrored by the Android app
-// (data/Models.kt).
-const size_t MAX_ENTRIES = 256;      // bells across all groups and overrides
-const size_t MAX_GROUPS = 12;        // named schedule groups
-const size_t MAX_OVERRIDES = 90;     // per-date overrides
-const size_t MAX_LABEL_BYTES = 32;   // About 10 Cyrillic characters in UTF-8.
-const size_t MAX_GROUP_NAME_BYTES = 32;
+// A schedule is an ordered list of packs ("пачки"). A base pack contributes
+// its entries; a correction cancels the entries of every base pack above it.
+// Packs can have a date range, individual dates and a yearly repeat. Auto mode
+// can still be limited to a global date range. The limits below are mirrored
+// by the Android app (data/Models.kt).
+const size_t MAX_PACKS = 12;          // ordered packs
+const size_t MAX_PACK_ENTRIES = 16;   // entries inside one pack
+const size_t MAX_PACK_DATES = 24;     // individual dates inside one pack
+const size_t MAX_ENTRIES = MAX_PACKS * MAX_PACK_ENTRIES;
+const size_t MAX_LABEL_BYTES = 32;    // About 10 Cyrillic characters in UTF-8.
+const size_t MAX_PACK_NAME_BYTES = 32;
 // Bodies larger than this are rejected before parsing, so an oversized
 // document cannot exhaust the heap.
-const size_t MAX_SCHEDULE_BODY_BYTES = 16384;
+const size_t MAX_SCHEDULE_BODY_BYTES = 32768;
 const uint8_t MIN_RING_SEC = 1;
 const uint8_t MAX_RING_SEC = 60;
 const uint8_t DEFAULT_RING_SEC = 5;
@@ -81,32 +83,29 @@ const uint32_t AP_IP_CHECK_MS = 5000;
 // ------------------------------- Types ------------------------------------
 
 struct ScheduleEntry {
-  uint16_t minuteOfDay = 0;  // 0..1439
+  uint16_t minuteOfDay = 0;       // 0..1439
+  uint16_t pairMinuteOfDay = 0xFFFF;  // 0xFFFF = no pair
   uint8_t daysMask = ALL_DAYS_MASK;
-  uint8_t duration = DEFAULT_RING_SEC;
-  uint8_t groupId = 0;       // owning group, 0 for override entries
-  uint8_t overrideSlot = 0;  // 1..MAX_OVERRIDES, 0 for schedule entries
+  uint8_t packId = 0;             // owning pack
   String label;
 };
 
-struct ScheduleGroup {
+enum PackKind : uint8_t {
+  PACK_BASE = 0,
+  PACK_CORRECTION = 1,
+};
+
+struct SchedulePack {
   uint8_t id = 0;
-  uint8_t daysMask = ALL_DAYS_MASK;
+  uint8_t kind = PACK_BASE;
+  bool enabled = true;
+  bool yearly = false;
+  bool mute = false;  // legacy correction that only cancels the packs above
+  uint32_t fromKey = 0;  // YYYYMMDD, 0 = no limit
+  uint32_t toKey = 0;
+  uint32_t dates[MAX_PACK_DATES];  // 0 = unused
+  uint8_t dateCount = 0;
   String name;
-};
-
-// How a date override changes the day: ring nothing, use its own bell list or
-// add extra bells on top of the schedule.
-enum OverrideMode : uint8_t {
-  OVERRIDE_MUTE = 0,
-  OVERRIDE_REPLACE = 1,
-  OVERRIDE_ADD = 2,
-};
-
-struct DayOverride {
-  uint32_t dateKey = 0;        // YYYYMMDD
-  uint8_t mode = OVERRIDE_MUTE;
-  uint8_t basedOnGroupId = 0;  // metadata only, never used for evaluation
 };
 
 // ------------------------------- State ------------------------------------
@@ -125,11 +124,9 @@ String currentMode = "auto";
 ScheduleEntry entries[MAX_ENTRIES];
 size_t entryCount = 0;
 
-ScheduleGroup groups[MAX_GROUPS];
-size_t groupCount = 0;
+SchedulePack packs[MAX_PACKS];
+size_t packCount = 0;
 
-DayOverride overrides[MAX_OVERRIDES];
-size_t overrideCount = 0;
 // Auto mode date range. A zero key means "no limit".
 uint32_t autoStartDate = 0;
 uint32_t autoStopDate = 0;
@@ -138,10 +135,8 @@ uint32_t autoStopDate = 0;
 // the document has been validated and written to flash.
 ScheduleEntry parsedEntries[MAX_ENTRIES];
 size_t parsedEntryCount = 0;
-ScheduleGroup parsedGroups[MAX_GROUPS];
-size_t parsedGroupCount = 0;
-DayOverride parsedOverrides[MAX_OVERRIDES];
-size_t parsedOverrideCount = 0;
+SchedulePack parsedPacks[MAX_PACKS];
+size_t parsedPackCount = 0;
 uint32_t parsedAutoStart = 0;
 uint32_t parsedAutoStop = 0;
 
@@ -321,30 +316,60 @@ uint32_t addDaysToDateKey(uint32_t key, int days) {
   return dateKeyOf(moved);
 }
 
-const char *overrideModeName(uint8_t mode) {
-  switch (mode) {
-    case OVERRIDE_REPLACE:
-      return "replace";
-    case OVERRIDE_ADD:
-      return "add";
-    default:
-      return "mute";
-  }
+const char *packKindName(uint8_t kind) {
+  return kind == PACK_CORRECTION ? "correction" : "base";
 }
 
-bool parseOverrideMode(JsonVariant value, uint8_t &mode) {
+bool parsePackKind(JsonVariant value, uint8_t &kind) {
   if (!value.is<const char *>()) return false;
   String raw = String(value.as<const char *>());
-  if (raw == "mute") {
-    mode = OVERRIDE_MUTE;
-  } else if (raw == "replace") {
-    mode = OVERRIDE_REPLACE;
-  } else if (raw == "add") {
-    mode = OVERRIDE_ADD;
+  if (raw == "base") {
+    kind = PACK_BASE;
+  } else if (raw == "correction") {
+    kind = PACK_CORRECTION;
   } else {
     return false;
   }
   return true;
+}
+
+bool sameMonthDay(uint32_t a, uint32_t b) {
+  return ((a / 100UL) % 100UL) == ((b / 100UL) % 100UL) && (a % 100UL) == (b % 100UL);
+}
+
+uint32_t monthDayKey(uint32_t dateKey) {
+  return ((dateKey / 100UL) % 100UL) * 100UL + (dateKey % 100UL);
+}
+
+bool rangeAllowsDate(const SchedulePack &pack, uint32_t dateKey) {
+  if (pack.fromKey == 0 && pack.toKey == 0) return false;
+  if (pack.yearly) {
+    uint32_t value = monthDayKey(dateKey);
+    uint32_t start = pack.fromKey != 0 ? monthDayKey(pack.fromKey) : 0;
+    uint32_t end = pack.toKey != 0 ? monthDayKey(pack.toKey) : 0;
+    if (start != 0 && end != 0) {
+      if (start > end) return value >= start || value <= end;
+      return value >= start && value <= end;
+    }
+    if (start != 0) return value >= start;
+    return value <= end;
+  }
+  if (pack.fromKey != 0 && dateKey < pack.fromKey) return false;
+  if (pack.toKey != 0 && dateKey > pack.toKey) return false;
+  return true;
+}
+
+bool packAllowsDate(const SchedulePack &pack, uint32_t dateKey) {
+  bool hasRange = pack.fromKey != 0 || pack.toKey != 0;
+  bool hasDates = pack.dateCount > 0;
+  if (!hasRange && !hasDates) return true;
+  if (hasRange && rangeAllowsDate(pack, dateKey)) return true;
+  for (uint8_t i = 0; i < pack.dateCount; ++i) {
+    if (pack.yearly ? sameMonthDay(pack.dates[i], dateKey) : pack.dates[i] == dateKey) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // Truncates a UTF-8 string to at most maxBytes bytes without splitting a
@@ -431,24 +456,21 @@ void loadSettingsFromFlash() {
 
 // --------------------------- Schedule document ----------------------------
 //
-// Canonical document (version 3):
+// Canonical document (version 4):
 // {
-//   "version": 3,
+//   "version": 4,
 //   "auto": {"start": "YYYY-MM-DD", "stop": "YYYY-MM-DD"},
-//   "groups": [
-//     {"id": 1, "name": "Будни", "days": [1,2,3,4,5],
-//      "entries": [{"time": "08:00", "days": [...], "duration": 5, "label": "..."}]}
-//   ],
-//   "overrides": [
-//     {"date": "YYYY-MM-DD", "mode": "mute"},
-//     {"date": "YYYY-MM-DD", "mode": "replace", "based_on": 1,
-//      "entries": [{"time": "09:00", "duration": 5, "label": "..."}]},
-//     {"date": "YYYY-MM-DD", "mode": "add",
-//      "entries": [{"time": "12:30", "duration": 10, "label": "..."}]}
+//   "packs": [
+//     {"id": 1, "name": "Будни", "kind": "base", "enabled": true,
+//      "yearly": false, "from": "YYYY-MM-DD", "to": "YYYY-MM-DD",
+//      "dates": ["YYYY-MM-DD"],
+//      "entries": [{"time": "08:00", "pair": "08:45", "days": [...], "label": "..."}]},
+//     {"id": 2, "name": "Коррекция", "kind": "correction", "dates": ["YYYY-MM-DD"],
+//      "entries": [{"time": "10:00", "days": [...]}]}
 //   ]
 // }
-// Version 2 documents ("exceptions" with mute/group_id) and version 1 documents
-// (a flat "entries" array) are still accepted and migrated in memory.
+// Version 1 (flat "entries"), version 2 ("exceptions") and version 3
+// ("groups"/"overrides") documents are migrated in memory.
 
 bool parseDaysMask(JsonVariant value, uint8_t &mask) {
   if (value.isNull()) {
@@ -469,8 +491,7 @@ bool parseDaysMask(JsonVariant value, uint8_t &mask) {
   return true;
 }
 
-bool parseScheduleEntry(JsonObject obj, uint8_t groupId, uint8_t overrideSlot,
-                        ScheduleEntry &out) {
+bool parseScheduleEntry(JsonObject obj, uint8_t packId, ScheduleEntry &out) {
   JsonVariant timeValue = obj["time"];
   if (!timeValue.is<const char *>()) return false;
   uint16_t minuteOfDay = 0;
@@ -478,18 +499,23 @@ bool parseScheduleEntry(JsonObject obj, uint8_t groupId, uint8_t overrideSlot,
     return false;
   }
 
-  // A schedule bell may carry a weekday mask that narrows the group. Inside an
-  // override the date decides, so "days" is ignored there.
-  uint8_t daysMask = ALL_DAYS_MASK;
-  if (overrideSlot == 0 && !parseDaysMask(obj["days"], daysMask)) return false;
+  uint16_t pairMinuteOfDay = 0xFFFF;
+  JsonVariant pairValue = obj["pair"];
+  if (!pairValue.isNull()) {
+    if (!pairValue.is<const char *>()) return false;
+    uint16_t parsedPair = 0;
+    if (!parseTimeOfDay(String(pairValue.as<const char *>()), parsedPair)) return false;
+    pairMinuteOfDay = parsedPair;
+  }
 
-  uint8_t duration = ringDefault;
-  JsonVariant durationValue = obj["duration"];
-  if (!durationValue.isNull()) {
-    if (!durationValue.is<int>()) return false;
-    int d = durationValue.as<int>();
-    if (d < MIN_RING_SEC || d > MAX_RING_SEC) return false;
-    duration = static_cast<uint8_t>(d);
+  uint8_t daysMask = ALL_DAYS_MASK;
+  JsonVariant daysValue = obj["days"];
+  if (!daysValue.isNull()) {
+    if (!daysValue.is<JsonArray>()) return false;
+    // An empty list means \"every day\", matching the app's decoder.
+    if (daysValue.as<JsonArray>().size() > 0 && !parseDaysMask(daysValue, daysMask)) {
+      return false;
+    }
   }
 
   String label;
@@ -500,48 +526,75 @@ bool parseScheduleEntry(JsonObject obj, uint8_t groupId, uint8_t overrideSlot,
   }
 
   out.minuteOfDay = minuteOfDay;
+  out.pairMinuteOfDay = pairMinuteOfDay;
   out.daysMask = daysMask;
-  out.duration = duration;
-  out.groupId = groupId;
-  out.overrideSlot = overrideSlot;
+  out.packId = packId;
   out.label = label;
   return true;
 }
 
-bool parsedGroupExists(uint8_t id) {
-  for (size_t i = 0; i < parsedGroupCount; ++i) {
-    if (parsedGroups[i].id == id) return true;
+bool parsedPackExists(uint8_t id) {
+  for (size_t i = 0; i < parsedPackCount; ++i) {
+    if (parsedPacks[i].id == id) return true;
   }
   return false;
 }
 
-// Parses a schedule document into the scratch buffers.
-// Returns nullptr on success, otherwise a stable error code string.
-const char *parseScheduleDocument(JsonDocument &doc) {
-  parsedEntryCount = 0;
-  parsedGroupCount = 0;
-  parsedOverrideCount = 0;
-  parsedAutoStart = 0;
-  parsedAutoStop = 0;
+// Appends a new parsed pack and returns its id (0 when the limit is reached).
+uint8_t beginParsedPack(uint8_t kind, const String &name, bool mute) {
+  if (parsedPackCount >= MAX_PACKS) return 0;
+  SchedulePack &pack = parsedPacks[parsedPackCount];
+  pack.id = static_cast<uint8_t>(parsedPackCount + 1);
+  pack.kind = kind;
+  pack.enabled = true;
+  pack.yearly = false;
+  pack.mute = mute;
+  pack.fromKey = 0;
+  pack.toKey = 0;
+  pack.dateCount = 0;
+  pack.name = name;
+  ++parsedPackCount;
+  return pack.id;
+}
 
+// Finds the pack that a version 2 "group_id" exception refers to.
+uint8_t legacyPackIdForGroup(uint8_t originalId, const uint8_t *groupIds,
+                             const uint8_t *packIds, size_t count) {
+  for (size_t i = 0; i < count; ++i) {
+    if (groupIds[i] == originalId) return packIds[i];
+  }
+  return 0;
+}
+
+// Migrates version 1/2/3 documents into packs.
+const char *parseLegacySchedule(JsonDocument &doc) {
   JsonVariant groupsValue = doc["groups"];
+  JsonVariant overridesValue = doc["overrides"];
+  JsonVariant exceptionsValue = doc["exceptions"];
+  if (!overridesValue.isNull() && !exceptionsValue.isNull()) {
+    return "invalid_schedule";
+  }
+
+  uint8_t legacyGroupIds[MAX_PACKS];
+  uint8_t legacyPackIds[MAX_PACKS];
+  size_t legacyGroupCount = 0;
+
   if (!groupsValue.isNull()) {
     if (!groupsValue.is<JsonArray>()) return "invalid_schedule";
     JsonArray groupsArray = groupsValue.as<JsonArray>();
-    if (groupsArray.size() > MAX_GROUPS) return "too_many_groups";
+    if (groupsArray.size() > MAX_PACKS) return "too_many_packs";
 
     for (JsonVariant groupValue : groupsArray) {
       if (!groupValue.is<JsonObject>()) return "invalid_schedule";
       JsonObject groupObj = groupValue.as<JsonObject>();
 
-      uint8_t groupId = static_cast<uint8_t>(parsedGroupCount + 1);
+      uint8_t originalId = static_cast<uint8_t>(legacyGroupCount + 1);
       JsonVariant idValue = groupObj["id"];
       if (!idValue.isNull()) {
         if (!idValue.is<int>()) return "invalid_schedule";
         int id = idValue.as<int>();
         if (id < 1 || id > 255) return "invalid_schedule";
-        if (parsedGroupExists(static_cast<uint8_t>(id))) return "invalid_schedule";
-        groupId = static_cast<uint8_t>(id);
+        originalId = static_cast<uint8_t>(id);
       }
 
       uint8_t groupDays = ALL_DAYS_MASK;
@@ -552,46 +605,47 @@ const char *parseScheduleDocument(JsonDocument &doc) {
       JsonVariant nameValue = groupObj["name"];
       if (!nameValue.isNull()) {
         if (!nameValue.is<const char *>()) return "invalid_schedule";
-        name = truncateUtf8(String(nameValue.as<const char *>()), MAX_GROUP_NAME_BYTES);
+        name = truncateUtf8(String(nameValue.as<const char *>()), MAX_PACK_NAME_BYTES);
       }
 
       JsonVariant entriesValue = groupObj["entries"];
       if (entriesValue.isNull() || !entriesValue.is<JsonArray>()) {
         return "invalid_schedule";
       }
-      for (JsonVariant item : entriesValue.as<JsonArray>()) {
+      JsonArray entriesArray = entriesValue.as<JsonArray>();
+      if (entriesArray.size() > MAX_PACK_ENTRIES) return "too_many_pack_entries";
+
+      uint8_t packId = beginParsedPack(PACK_BASE, name, false);
+      if (packId == 0) return "too_many_packs";
+      legacyGroupIds[legacyGroupCount] = originalId;
+      legacyPackIds[legacyGroupCount] = packId;
+      ++legacyGroupCount;
+
+      for (JsonVariant item : entriesArray) {
         if (!item.is<JsonObject>()) return "invalid_schedule";
         if (parsedEntryCount >= MAX_ENTRIES) return "too_many_entries";
-        if (!parseScheduleEntry(item.as<JsonObject>(), groupId, 0,
+        if (!parseScheduleEntry(item.as<JsonObject>(), packId,
                                 parsedEntries[parsedEntryCount])) {
           return "invalid_schedule";
         }
+        parsedEntries[parsedEntryCount].daysMask &= groupDays;
         ++parsedEntryCount;
       }
-
-      parsedGroups[parsedGroupCount].id = groupId;
-      parsedGroups[parsedGroupCount].daysMask = groupDays;
-      parsedGroups[parsedGroupCount].name = name;
-      ++parsedGroupCount;
     }
   } else {
-    // Legacy document: a flat list. It becomes one group that is active every
-    // day; the per-entry weekday masks still apply.
+    // Version 1: a flat list becomes one all-week base pack.
     JsonVariant entriesValue = doc["entries"];
     if (entriesValue.isNull() || !entriesValue.is<JsonArray>()) {
       return "invalid_schedule";
     }
     JsonArray entriesArray = entriesValue.as<JsonArray>();
-    if (entriesArray.size() > MAX_ENTRIES) return "too_many_entries";
-
-    parsedGroups[0].id = 1;
-    parsedGroups[0].daysMask = ALL_DAYS_MASK;
-    parsedGroups[0].name = String("Расписание");
-    parsedGroupCount = 1;
-
+    if (entriesArray.size() > MAX_PACK_ENTRIES) return "too_many_pack_entries";
+    uint8_t packId = beginParsedPack(PACK_BASE, String("Расписание"), false);
+    if (packId == 0) return "too_many_packs";
     for (JsonVariant item : entriesArray) {
       if (!item.is<JsonObject>()) return "invalid_schedule";
-      if (!parseScheduleEntry(item.as<JsonObject>(), 1, 0,
+      if (parsedEntryCount >= MAX_ENTRIES) return "too_many_entries";
+      if (!parseScheduleEntry(item.as<JsonObject>(), packId,
                               parsedEntries[parsedEntryCount])) {
         return "invalid_schedule";
       }
@@ -599,87 +653,104 @@ const char *parseScheduleDocument(JsonDocument &doc) {
     }
   }
 
-  // Version 3 replaces "exceptions" with "overrides".
-  JsonVariant overridesValue = doc["overrides"];
-  JsonVariant exceptionsValue = doc["exceptions"];
-  if (!overridesValue.isNull() && !exceptionsValue.isNull()) {
-    return "invalid_schedule";
-  }
-
+  // Version 3 "add" overrides become date-limited base packs.
   if (!overridesValue.isNull()) {
     if (!overridesValue.is<JsonArray>()) return "invalid_schedule";
-    JsonArray overridesArray = overridesValue.as<JsonArray>();
-    if (overridesArray.size() > MAX_OVERRIDES) return "too_many_overrides";
-
-    for (JsonVariant item : overridesArray) {
+    for (JsonVariant item : overridesValue.as<JsonArray>()) {
       if (!item.is<JsonObject>()) return "invalid_schedule";
       JsonObject obj = item.as<JsonObject>();
-
       JsonVariant dateValue = obj["date"];
       if (!dateValue.is<const char *>()) return "invalid_schedule";
       uint32_t dateKey = 0;
       if (!parseDateKey(String(dateValue.as<const char *>()), dateKey)) {
         return "invalid_schedule";
       }
-      for (size_t i = 0; i < parsedOverrideCount; ++i) {
-        if (parsedOverrides[i].dateKey == dateKey) return "invalid_schedule";
-      }
-
-      uint8_t mode = OVERRIDE_MUTE;
-      if (!parseOverrideMode(obj["mode"], mode)) return "invalid_schedule";
-
-      uint8_t basedOn = 0;
-      JsonVariant basedValue = obj["based_on"];
-      if (!basedValue.isNull()) {
-        if (!basedValue.is<int>()) return "invalid_schedule";
-        int id = basedValue.as<int>();
-        if (id < 0 || id > 255) return "invalid_schedule";
-        basedOn = static_cast<uint8_t>(id);
-      }
-
-      uint8_t slot = static_cast<uint8_t>(parsedOverrideCount + 1);
-      if (mode != OVERRIDE_MUTE) {
-        JsonVariant entriesValue = obj["entries"];
-        if (!entriesValue.isNull()) {
-          if (!entriesValue.is<JsonArray>()) return "invalid_schedule";
-          for (JsonVariant entry : entriesValue.as<JsonArray>()) {
-            if (!entry.is<JsonObject>()) return "invalid_schedule";
-            if (parsedEntryCount >= MAX_ENTRIES) return "too_many_entries";
-            if (!parseScheduleEntry(entry.as<JsonObject>(), 0, slot,
-                                    parsedEntries[parsedEntryCount])) {
-              return "invalid_schedule";
-            }
-            ++parsedEntryCount;
+      JsonVariant modeValue = obj["mode"];
+      if (!modeValue.is<const char *>()) return "invalid_schedule";
+      String mode = String(modeValue.as<const char *>());
+      if (mode != "add") continue;
+      if (parsedPackCount >= MAX_PACKS) return "too_many_packs";
+      uint8_t packId = beginParsedPack(PACK_BASE, String(""), false);
+      if (packId == 0) return "too_many_packs";
+      parsedPacks[parsedPackCount - 1].dateCount = 1;
+      parsedPacks[parsedPackCount - 1].dates[0] = dateKey;
+      JsonVariant entriesValue = obj["entries"];
+      if (!entriesValue.isNull()) {
+        if (!entriesValue.is<JsonArray>()) return "invalid_schedule";
+        JsonArray entriesArray = entriesValue.as<JsonArray>();
+        if (entriesArray.size() > MAX_PACK_ENTRIES) return "too_many_pack_entries";
+        for (JsonVariant entry : entriesArray) {
+          if (!entry.is<JsonObject>()) return "invalid_schedule";
+          if (parsedEntryCount >= MAX_ENTRIES) return "too_many_entries";
+          if (!parseScheduleEntry(entry.as<JsonObject>(), packId,
+                                  parsedEntries[parsedEntryCount])) {
+            return "invalid_schedule";
           }
+          parsedEntries[parsedEntryCount].daysMask = ALL_DAYS_MASK;
+          ++parsedEntryCount;
         }
       }
-
-      parsedOverrides[parsedOverrideCount].dateKey = dateKey;
-      parsedOverrides[parsedOverrideCount].mode = mode;
-      parsedOverrides[parsedOverrideCount].basedOnGroupId = basedOn;
-      ++parsedOverrideCount;
     }
   }
 
-  // Version 2 migration: "mute" stays mute, "group_id" becomes a copy of that
-  // group's bell list. The next save rewrites storage as version 3.
-  if (!exceptionsValue.isNull()) {
-    if (!exceptionsValue.is<JsonArray>()) return "invalid_schedule";
-    JsonArray exceptionsArray = exceptionsValue.as<JsonArray>();
-    if (exceptionsArray.size() > MAX_OVERRIDES) return "too_many_exceptions";
-
-    for (JsonVariant item : exceptionsArray) {
+  // Version 3 "mute"/"replace" overrides become corrections.
+  if (!overridesValue.isNull()) {
+    for (JsonVariant item : overridesValue.as<JsonArray>()) {
       if (!item.is<JsonObject>()) return "invalid_schedule";
       JsonObject obj = item.as<JsonObject>();
-
       JsonVariant dateValue = obj["date"];
       if (!dateValue.is<const char *>()) return "invalid_schedule";
       uint32_t dateKey = 0;
       if (!parseDateKey(String(dateValue.as<const char *>()), dateKey)) {
         return "invalid_schedule";
       }
-      for (size_t i = 0; i < parsedOverrideCount; ++i) {
-        if (parsedOverrides[i].dateKey == dateKey) return "invalid_schedule";
+      JsonVariant modeValue = obj["mode"];
+      if (!modeValue.is<const char *>()) return "invalid_schedule";
+      String mode = String(modeValue.as<const char *>());
+      if (mode == "add") continue;
+      bool mute = mode == "mute";
+      if (!mute && mode != "replace") return "invalid_schedule";
+      if (parsedPackCount >= MAX_PACKS) return "too_many_packs";
+      uint8_t packId = beginParsedPack(PACK_CORRECTION, String(""), mute);
+      if (packId == 0) return "too_many_packs";
+      parsedPacks[parsedPackCount - 1].dateCount = 1;
+      parsedPacks[parsedPackCount - 1].dates[0] = dateKey;
+      if (mute) continue;
+      size_t beforeEntries = parsedEntryCount;
+      JsonVariant entriesValue = obj["entries"];
+      if (!entriesValue.isNull()) {
+        if (!entriesValue.is<JsonArray>()) return "invalid_schedule";
+        JsonArray entriesArray = entriesValue.as<JsonArray>();
+        if (entriesArray.size() > MAX_PACK_ENTRIES) return "too_many_pack_entries";
+        for (JsonVariant entry : entriesArray) {
+          if (!entry.is<JsonObject>()) return "invalid_schedule";
+          if (parsedEntryCount >= MAX_ENTRIES) return "too_many_entries";
+          if (!parseScheduleEntry(entry.as<JsonObject>(), packId,
+                                  parsedEntries[parsedEntryCount])) {
+            return "invalid_schedule";
+          }
+          parsedEntries[parsedEntryCount].daysMask = ALL_DAYS_MASK;
+          ++parsedEntryCount;
+        }
+      }
+      // A v3 replace with an empty list means "no bells", i.e. mute.
+      if (parsedEntryCount == beforeEntries) {
+        parsedPacks[parsedPackCount - 1].mute = true;
+      }
+    }
+  }
+
+  // Version 2 exceptions: mute or a copy of the referenced group.
+  if (!exceptionsValue.isNull()) {
+    if (!exceptionsValue.is<JsonArray>()) return "invalid_schedule";
+    for (JsonVariant item : exceptionsValue.as<JsonArray>()) {
+      if (!item.is<JsonObject>()) return "invalid_schedule";
+      JsonObject obj = item.as<JsonObject>();
+      JsonVariant dateValue = obj["date"];
+      if (!dateValue.is<const char *>()) return "invalid_schedule";
+      uint32_t dateKey = 0;
+      if (!parseDateKey(String(dateValue.as<const char *>()), dateKey)) {
+        return "invalid_schedule";
       }
 
       bool mute = false;
@@ -689,38 +760,188 @@ const char *parseScheduleDocument(JsonDocument &doc) {
         mute = muteValue.as<bool>();
       }
 
-      uint8_t groupId = 0;
+      uint8_t sourcePackId = 0;
       JsonVariant groupIdValue = obj["group_id"];
       if (!groupIdValue.isNull()) {
         if (!groupIdValue.is<int>()) return "invalid_schedule";
         int id = groupIdValue.as<int>();
-        if (id < 1 || id > 255 || !parsedGroupExists(static_cast<uint8_t>(id))) {
-          return "invalid_schedule";
-        }
-        groupId = static_cast<uint8_t>(id);
+        if (id < 1 || id > 255) return "invalid_schedule";
+        sourcePackId = legacyPackIdForGroup(static_cast<uint8_t>(id), legacyGroupIds,
+                                            legacyPackIds, legacyGroupCount);
+        if (sourcePackId == 0) return "invalid_schedule";
       }
-      if (!mute && groupId == 0) return "invalid_schedule";
+      if (!mute && sourcePackId == 0) return "invalid_schedule";
 
-      uint8_t mode = mute ? OVERRIDE_MUTE : OVERRIDE_REPLACE;
-      uint8_t slot = static_cast<uint8_t>(parsedOverrideCount + 1);
-      if (mode == OVERRIDE_REPLACE) {
-        size_t groupEntryCount = parsedEntryCount;
-        for (size_t i = 0; i < groupEntryCount; ++i) {
-          if (parsedEntries[i].overrideSlot != 0) continue;
-          if (parsedEntries[i].groupId != groupId) continue;
+      if (parsedPackCount >= MAX_PACKS) return "too_many_packs";
+      uint8_t packId = beginParsedPack(PACK_CORRECTION, String(""), mute);
+      if (packId == 0) return "too_many_packs";
+      parsedPacks[parsedPackCount - 1].dateCount = 1;
+      parsedPacks[parsedPackCount - 1].dates[0] = dateKey;
+
+      if (!mute) {
+        size_t sourceEntryCount = parsedEntryCount;
+        for (size_t i = 0; i < sourceEntryCount; ++i) {
+          if (parsedEntries[i].packId != sourcePackId) continue;
           if (parsedEntryCount >= MAX_ENTRIES) return "too_many_entries";
           parsedEntries[parsedEntryCount] = parsedEntries[i];
-          parsedEntries[parsedEntryCount].groupId = 0;
-          parsedEntries[parsedEntryCount].overrideSlot = slot;
+          parsedEntries[parsedEntryCount].packId = packId;
+          // A date exception ignores weekdays in v2.
+          parsedEntries[parsedEntryCount].daysMask = ALL_DAYS_MASK;
+          ++parsedEntryCount;
+        }
+        // Copying an empty group means "no bells", i.e. mute.
+        if (parsedEntryCount == sourceEntryCount) {
+          parsedPacks[parsedPackCount - 1].mute = true;
+        }
+      }
+    }
+  }
+
+  return nullptr;
+}
+
+// Parses a schedule document into the scratch buffers.
+// Returns nullptr on success, otherwise a stable error code string.
+const char *parseScheduleDocument(JsonDocument &doc) {
+  parsedEntryCount = 0;
+  parsedPackCount = 0;
+  parsedAutoStart = 0;
+  parsedAutoStop = 0;
+
+  JsonVariant packsValue = doc["packs"];
+  if (!packsValue.isNull()) {
+    if (!packsValue.is<JsonArray>()) return "invalid_schedule";
+    JsonArray packsArray = packsValue.as<JsonArray>();
+    if (packsArray.size() > MAX_PACKS) return "too_many_packs";
+
+    for (JsonVariant packValue : packsArray) {
+      if (!packValue.is<JsonObject>()) return "invalid_schedule";
+      JsonObject packObj = packValue.as<JsonObject>();
+
+      uint8_t packId = static_cast<uint8_t>(parsedPackCount + 1);
+      JsonVariant idValue = packObj["id"];
+      if (!idValue.isNull()) {
+        if (!idValue.is<int>()) return "invalid_schedule";
+        int id = idValue.as<int>();
+        if (id < 1 || id > 255) return "invalid_schedule";
+        if (parsedPackExists(static_cast<uint8_t>(id))) return "invalid_schedule";
+        packId = static_cast<uint8_t>(id);
+      }
+
+      uint8_t kind = PACK_BASE;
+      JsonVariant kindValue = packObj["kind"];
+      if (!kindValue.isNull()) {
+        if (!parsePackKind(kindValue, kind)) return "invalid_schedule";
+      }
+
+      bool enabled = true;
+      JsonVariant enabledValue = packObj["enabled"];
+      if (!enabledValue.isNull()) {
+        if (!enabledValue.is<bool>()) return "invalid_schedule";
+        enabled = enabledValue.as<bool>();
+      }
+
+      bool yearly = false;
+      JsonVariant yearlyValue = packObj["yearly"];
+      if (!yearlyValue.isNull()) {
+        if (!yearlyValue.is<bool>()) return "invalid_schedule";
+        yearly = yearlyValue.as<bool>();
+      }
+
+      bool mute = false;
+      JsonVariant muteValue = packObj["mute"];
+      if (!muteValue.isNull()) {
+        if (!muteValue.is<bool>()) return "invalid_schedule";
+        mute = muteValue.as<bool>();
+      }
+      if (mute && kind != PACK_CORRECTION) return "invalid_schedule";
+
+      String name;
+      JsonVariant nameValue = packObj["name"];
+      if (!nameValue.isNull()) {
+        if (!nameValue.is<const char *>()) return "invalid_schedule";
+        name = truncateUtf8(String(nameValue.as<const char *>()), MAX_PACK_NAME_BYTES);
+      }
+
+      uint32_t fromKey = 0;
+      uint32_t toKey = 0;
+      JsonVariant fromValue = packObj["from"];
+      if (!fromValue.isNull()) {
+        if (!fromValue.is<const char *>()) return "invalid_schedule";
+        if (!parseDateKey(String(fromValue.as<const char *>()), fromKey)) {
+          return "invalid_schedule";
+        }
+      }
+      JsonVariant toValue = packObj["to"];
+      if (!toValue.isNull()) {
+        if (!toValue.is<const char *>()) return "invalid_schedule";
+        if (!parseDateKey(String(toValue.as<const char *>()), toKey)) {
+          return "invalid_schedule";
+        }
+      }
+      if (!yearly && fromKey != 0 && toKey != 0 && toKey < fromKey) {
+        return "invalid_schedule";
+      }
+
+      uint32_t dates[MAX_PACK_DATES];
+      uint8_t dateCount = 0;
+      JsonVariant datesValue = packObj["dates"];
+      if (!datesValue.isNull()) {
+        if (!datesValue.is<JsonArray>()) return "invalid_schedule";
+        JsonArray datesArray = datesValue.as<JsonArray>();
+        if (datesArray.size() > MAX_PACK_DATES) return "too_many_pack_dates";
+        for (JsonVariant dateValue : datesArray) {
+          if (!dateValue.is<const char *>()) return "invalid_schedule";
+          uint32_t key = 0;
+          if (!parseDateKey(String(dateValue.as<const char *>()), key)) {
+            return "invalid_schedule";
+          }
+          bool duplicate = false;
+          for (uint8_t i = 0; i < dateCount; ++i) {
+            if (dates[i] == key) duplicate = true;
+          }
+          if (!duplicate && dateCount < MAX_PACK_DATES) dates[dateCount++] = key;
+        }
+      }
+
+      JsonVariant entriesValue = packObj["entries"];
+      if (!entriesValue.isNull() && !entriesValue.is<JsonArray>()) {
+        return "invalid_schedule";
+      }
+      size_t entriesSize =
+          entriesValue.isNull() ? 0 : entriesValue.as<JsonArray>().size();
+      if (entriesSize > MAX_PACK_ENTRIES) return "too_many_pack_entries";
+      if (parsedEntryCount + entriesSize > MAX_ENTRIES) {
+        return "too_many_entries";
+      }
+
+      SchedulePack &pack = parsedPacks[parsedPackCount];
+      pack.id = packId;
+      pack.kind = kind;
+      pack.enabled = enabled;
+      pack.yearly = yearly;
+      pack.mute = mute;
+      pack.fromKey = fromKey;
+      pack.toKey = toKey;
+      pack.dateCount = dateCount;
+      for (uint8_t i = 0; i < dateCount; ++i) pack.dates[i] = dates[i];
+      pack.name = name;
+      ++parsedPackCount;
+
+      if (!entriesValue.isNull()) {
+        for (JsonVariant item : entriesValue.as<JsonArray>()) {
+          if (!item.is<JsonObject>()) return "invalid_schedule";
+          if (!parseScheduleEntry(item.as<JsonObject>(), packId,
+                                  parsedEntries[parsedEntryCount])) {
+            return "invalid_schedule";
+          }
           ++parsedEntryCount;
         }
       }
-
-      parsedOverrides[parsedOverrideCount].dateKey = dateKey;
-      parsedOverrides[parsedOverrideCount].mode = mode;
-      parsedOverrides[parsedOverrideCount].basedOnGroupId = groupId;
-      ++parsedOverrideCount;
     }
+  } else {
+    const char *legacyError = parseLegacySchedule(doc);
+    if (legacyError != nullptr) return legacyError;
   }
 
   JsonVariant autoValue = doc["auto"];
@@ -753,53 +974,15 @@ const char *parseScheduleDocument(JsonDocument &doc) {
 void applyParsedSchedule() {
   for (size_t i = 0; i < parsedEntryCount; ++i) entries[i] = parsedEntries[i];
   entryCount = parsedEntryCount;
-  for (size_t i = 0; i < parsedGroupCount; ++i) groups[i] = parsedGroups[i];
-  groupCount = parsedGroupCount;
-  for (size_t i = 0; i < parsedOverrideCount; ++i) overrides[i] = parsedOverrides[i];
-  overrideCount = parsedOverrideCount;
+  for (size_t i = 0; i < parsedPackCount; ++i) packs[i] = parsedPacks[i];
+  packCount = parsedPackCount;
   autoStartDate = parsedAutoStart;
   autoStopDate = parsedAutoStop;
 }
 
-// Drops parsed overrides older than 30 days so the flash file does not grow
-// without bound. Entries follow their override slot.
-void pruneParsedOverrides(uint32_t todayKey) {
-  if (!timeIsValid()) return;
-  uint32_t cutoff = addDaysToDateKey(todayKey, -30);
-  uint8_t slotMap[MAX_OVERRIDES + 1];
-  for (size_t i = 0; i <= MAX_OVERRIDES; ++i) slotMap[i] = 0;
-
-  size_t kept = 0;
-  for (size_t i = 0; i < parsedOverrideCount; ++i) {
-    if (parsedOverrides[i].dateKey >= cutoff) {
-      slotMap[i + 1] = static_cast<uint8_t>(kept + 1);
-      if (kept != i) parsedOverrides[kept] = parsedOverrides[i];
-      ++kept;
-    }
-  }
-  parsedOverrideCount = kept;
-
-  size_t written = 0;
-  for (size_t i = 0; i < parsedEntryCount; ++i) {
-    uint8_t slot = parsedEntries[i].overrideSlot;
-    if (slot != 0) {
-      uint8_t mapped = slot <= MAX_OVERRIDES ? slotMap[slot] : 0;
-      if (mapped == 0) continue;
-      parsedEntries[written] = parsedEntries[i];
-      parsedEntries[written].overrideSlot = mapped;
-      ++written;
-    } else {
-      parsedEntries[written] = parsedEntries[i];
-      ++written;
-    }
-  }
-  parsedEntryCount = written;
-}
-
 void loadScheduleFromFlash() {
   entryCount = 0;
-  groupCount = 0;
-  overrideCount = 0;
+  packCount = 0;
   autoStartDate = 0;
   autoStopDate = 0;
   if (!storageOk) return;
@@ -820,20 +1003,23 @@ void writeDays(JsonObject &obj, uint8_t mask) {
   }
 }
 
-void appendEntry(JsonArray &arr, const ScheduleEntry &entry, bool withDays) {
+void appendEntry(JsonArray &arr, const ScheduleEntry &entry) {
   JsonObject obj = arr.add<JsonObject>();
   obj["time"] = formatTimeOfDay(entry.minuteOfDay);
-  if (withDays) writeDays(obj, entry.daysMask);
-  obj["duration"] = entry.duration;
+  if (entry.pairMinuteOfDay != 0xFFFF) {
+    obj["pair"] = formatTimeOfDay(entry.pairMinuteOfDay);
+  }
+  writeDays(obj, entry.daysMask);
   obj["label"] = entry.label;
 }
 
 void buildScheduleDocument(JsonDocument &doc, bool includeLimits) {
-  doc["version"] = 3;
+  doc["version"] = 4;
   if (includeLimits) {
     doc["max_entries"] = static_cast<unsigned>(MAX_ENTRIES);
-    doc["max_groups"] = static_cast<unsigned>(MAX_GROUPS);
-    doc["max_overrides"] = static_cast<unsigned>(MAX_OVERRIDES);
+    doc["max_packs"] = static_cast<unsigned>(MAX_PACKS);
+    doc["max_pack_entries"] = static_cast<unsigned>(MAX_PACK_ENTRIES);
+    doc["max_pack_dates"] = static_cast<unsigned>(MAX_PACK_DATES);
   }
   if (autoStartDate != 0 || autoStopDate != 0) {
     JsonObject autoObj = doc["auto"].to<JsonObject>();
@@ -841,39 +1027,28 @@ void buildScheduleDocument(JsonDocument &doc, bool includeLimits) {
     if (autoStopDate != 0) autoObj["stop"] = formatDateKey(autoStopDate);
   }
 
-  JsonArray groupsArray = doc["groups"].to<JsonArray>();
-  for (size_t g = 0; g < groupCount; ++g) {
-    JsonObject groupObj = groupsArray.add<JsonObject>();
-    groupObj["id"] = groups[g].id;
-    groupObj["name"] = groups[g].name;
-    writeDays(groupObj, groups[g].daysMask);
-    JsonArray entriesArray = groupObj["entries"].to<JsonArray>();
-    for (size_t i = 0; i < entryCount; ++i) {
-      if (entries[i].overrideSlot != 0) continue;
-      if (entries[i].groupId == groups[g].id) appendEntry(entriesArray, entries[i], true);
-    }
-  }
-
-  JsonArray overridesArray = doc["overrides"].to<JsonArray>();
-  for (size_t o = 0; o < overrideCount; ++o) {
-    JsonObject obj = overridesArray.add<JsonObject>();
-    obj["date"] = formatDateKey(overrides[o].dateKey);
-    obj["mode"] = overrideModeName(overrides[o].mode);
-    if (overrides[o].basedOnGroupId != 0) obj["based_on"] = overrides[o].basedOnGroupId;
-    if (overrides[o].mode == OVERRIDE_MUTE) continue;
-    JsonArray entriesArray = obj["entries"].to<JsonArray>();
-    for (size_t i = 0; i < entryCount; ++i) {
-      if (entries[i].overrideSlot == o + 1) {
-        // Weekdays are irrelevant inside an override, so they are not written.
-        appendEntry(entriesArray, entries[i], false);
+  JsonArray packsArray = doc["packs"].to<JsonArray>();
+  for (size_t p = 0; p < packCount; ++p) {
+    const SchedulePack &pack = packs[p];
+    JsonObject packObj = packsArray.add<JsonObject>();
+    packObj["id"] = pack.id;
+    packObj["name"] = pack.name;
+    packObj["kind"] = packKindName(pack.kind);
+    packObj["enabled"] = pack.enabled;
+    if (pack.yearly) packObj["yearly"] = true;
+    if (pack.mute) packObj["mute"] = true;
+    if (pack.fromKey != 0) packObj["from"] = formatDateKey(pack.fromKey);
+    if (pack.toKey != 0) packObj["to"] = formatDateKey(pack.toKey);
+    if (pack.dateCount > 0) {
+      JsonArray datesArray = packObj["dates"].to<JsonArray>();
+      for (uint8_t d = 0; d < pack.dateCount; ++d) {
+        datesArray.add(formatDateKey(pack.dates[d]));
       }
     }
-  }
-
-  // Legacy flat view so older clients can still read the weekly schedule.
-  JsonArray flat = doc["entries"].to<JsonArray>();
-  for (size_t i = 0; i < entryCount; ++i) {
-    if (entries[i].overrideSlot == 0) appendEntry(flat, entries[i], true);
+    JsonArray entriesArray = packObj["entries"].to<JsonArray>();
+    for (size_t i = 0; i < entryCount; ++i) {
+      if (entries[i].packId == pack.id) appendEntry(entriesArray, entries[i]);
+    }
   }
 }
 
@@ -1010,16 +1185,17 @@ void handleRtcTimers() {
 
 // ------------------------------ Schedule ----------------------------------
 
-// Bells resolved for one date. The buffer is static so the recursion-free
+// Bells resolved for one date. The buffers are static so the recursion-free
 // evaluation never touches the stack.
 struct DayBell {
   uint16_t minuteOfDay = 0;
-  uint8_t duration = DEFAULT_RING_SEC;
   uint16_t entryIndex = 0;
 };
 
 DayBell dayBells[MAX_ENTRIES];
 size_t dayBellCount = 0;
+DayBell correctionBells[MAX_ENTRIES];
+size_t correctionBellCount = 0;
 
 bool autoAllowsDate(uint32_t dateKey) {
   if (autoStartDate != 0 && dateKey < autoStartDate) return false;
@@ -1027,53 +1203,58 @@ bool autoAllowsDate(uint32_t dateKey) {
   return true;
 }
 
-int findOverrideIndex(uint32_t dateKey) {
-  for (size_t i = 0; i < overrideCount; ++i) {
-    if (overrides[i].dateKey == dateKey) return static_cast<int>(i);
+void appendDayBell(DayBell *buffer, size_t &count, const ScheduleEntry &entry,
+                   size_t index) {
+  if (count >= MAX_ENTRIES) return;
+  buffer[count].minuteOfDay = entry.minuteOfDay;
+  buffer[count].entryIndex = static_cast<uint16_t>(index);
+  ++count;
+}
+
+bool packHasEntryForDay(uint8_t packId, uint8_t weekdayMask) {
+  for (size_t i = 0; i < entryCount; ++i) {
+    if (entries[i].packId != packId) continue;
+    if (entries[i].daysMask & weekdayMask) return true;
   }
-  return -1;
+  return false;
 }
 
-void appendDayBell(const ScheduleEntry &entry, size_t index) {
-  if (dayBellCount >= MAX_ENTRIES) return;
-  dayBells[dayBellCount].minuteOfDay = entry.minuteOfDay;
-  dayBells[dayBellCount].duration = entry.duration;
-  dayBells[dayBellCount].entryIndex = static_cast<uint16_t>(index);
-  ++dayBellCount;
-}
-
-// Resolves a date exactly like BellSchedule.bellsFor() in the Android app:
-// auto window, first matching group, then mute / replace / add.
+// Resolves a date exactly like BellSchedule.bellsFor() in the Android app.
+// Base packs add bells; a correction with bells for this weekday first clears
+// every base bell collected above it, then adds its own.
 void collectDayBells(uint32_t dateKey, uint8_t weekdayMask) {
   dayBellCount = 0;
+  correctionBellCount = 0;
   if (!autoAllowsDate(dateKey)) return;
 
-  int overrideIndex = findOverrideIndex(dateKey);
-  const DayOverride *override = overrideIndex >= 0 ? &overrides[overrideIndex] : nullptr;
-  if (override != nullptr && override->mode == OVERRIDE_MUTE) return;
+  for (size_t p = 0; p < packCount; ++p) {
+    const SchedulePack &pack = packs[p];
+    if (!pack.enabled || !packAllowsDate(pack, dateKey)) continue;
 
-  if (override == nullptr || override->mode == OVERRIDE_ADD) {
-    uint8_t groupId = 0;
-    for (size_t g = 0; g < groupCount; ++g) {
-      if (groups[g].daysMask & weekdayMask) {
-        groupId = groups[g].id;
-        break;
-      }
-    }
-    if (groupId != 0) {
+    if (pack.kind == PACK_BASE) {
       for (size_t i = 0; i < entryCount; ++i) {
         const ScheduleEntry &entry = entries[i];
-        if (entry.overrideSlot != 0 || entry.groupId != groupId) continue;
-        if (entry.daysMask != 0 && (entry.daysMask & weekdayMask) == 0) continue;
-        appendDayBell(entry, i);
+        if (entry.packId != pack.id) continue;
+        if ((entry.daysMask & weekdayMask) == 0) continue;
+        appendDayBell(dayBells, dayBellCount, entry, i);
       }
+      continue;
+    }
+
+    bool applies = pack.mute || packHasEntryForDay(pack.id, weekdayMask);
+    if (!applies) continue;
+    dayBellCount = 0;
+    if (pack.mute) continue;
+    for (size_t i = 0; i < entryCount; ++i) {
+      const ScheduleEntry &entry = entries[i];
+      if (entry.packId != pack.id) continue;
+      if ((entry.daysMask & weekdayMask) == 0) continue;
+      appendDayBell(correctionBells, correctionBellCount, entry, i);
     }
   }
 
-  if (override == nullptr) return;
-  uint8_t slot = static_cast<uint8_t>(overrideIndex + 1);
-  for (size_t i = 0; i < entryCount; ++i) {
-    if (entries[i].overrideSlot == slot) appendDayBell(entries[i], i);
+  for (size_t i = 0; i < correctionBellCount && dayBellCount < MAX_ENTRIES; ++i) {
+    dayBells[dayBellCount++] = correctionBells[i];
   }
 }
 
@@ -1092,13 +1273,16 @@ void checkSchedule() {
 
   uint16_t minuteOfDay =
       static_cast<uint16_t>(cachedNow.hour() * 60 + cachedNow.minute());
-  uint8_t bestDuration = 0;
+  bool shouldRing = false;
   for (size_t i = 0; i < dayBellCount; ++i) {
-    if (dayBells[i].minuteOfDay != minuteOfDay) continue;
-    if (dayBells[i].duration > bestDuration) bestDuration = dayBells[i].duration;
+    if (dayBells[i].minuteOfDay == minuteOfDay) {
+      shouldRing = true;
+      break;
+    }
   }
 
-  if (bestDuration > 0) startRing(bestDuration);
+  // Ring duration comes from the settings, not from individual entries.
+  if (shouldRing) startRing(ringDefault);
 }
 
 // -------------------------------- LED -------------------------------------
@@ -1245,8 +1429,7 @@ void sendStatus() {
   doc["ring_left"] = ringing ? ringLeftSec : 0;
   doc["ring_default"] = ringDefault;
   doc["entries"] = static_cast<unsigned>(entryCount);
-  doc["groups"] = static_cast<unsigned>(groupCount);
-  doc["overrides"] = static_cast<unsigned>(overrideCount);
+  doc["packs"] = static_cast<unsigned>(packCount);
   if (autoStartDate != 0 || autoStopDate != 0) {
     JsonObject autoObj = doc["auto"].to<JsonObject>();
     if (autoStartDate != 0) autoObj["start"] = formatDateKey(autoStartDate);
@@ -1453,8 +1636,8 @@ void handleGetScheduleDay() {
       static_cast<uint8_t>(1U << (isoWeekdayFromDateKey(dateKey) - 1));
   collectDayBells(dateKey, weekdayMask);
 
-  // Merge bells that share a minute (keeping the longer duration) and sort by
-  // time into a small scratch buffer.
+  // Merge bells that share a minute and sort by time into a small scratch
+  // buffer. Duration comes from the settings, so the first bell wins.
   static DayBell merged[MAX_ENTRIES];
   size_t mergedCount = 0;
   bool taken[MAX_ENTRIES];
@@ -1465,7 +1648,6 @@ void handleGetScheduleDay() {
     for (size_t j = i + 1; j < dayBellCount; ++j) {
       if (dayBells[j].minuteOfDay != value.minuteOfDay) continue;
       taken[j] = true;
-      if (dayBells[j].duration > value.duration) value = dayBells[j];
     }
     size_t position = mergedCount;
     while (position > 0 && merged[position - 1].minuteOfDay > value.minuteOfDay) {
@@ -1482,7 +1664,7 @@ void handleGetScheduleDay() {
   for (size_t i = 0; i < mergedCount; ++i) {
     JsonObject obj = bells.add<JsonObject>();
     obj["time"] = formatTimeOfDay(merged[i].minuteOfDay);
-    obj["duration"] = merged[i].duration;
+    obj["duration"] = ringDefault;
     obj["label"] = entries[merged[i].entryIndex].label;
   }
   String payload;
@@ -1506,8 +1688,6 @@ void handlePostSchedule() {
     return;
   }
 
-  if (timeIsValid()) pruneParsedOverrides(dateKeyOf(cachedNow));
-
   // Commit the validated document, then persist exactly that state. The write
   // is atomic, so a failure keeps the previous file; reloading it puts the
   // device back to the schedule it had before this request.
@@ -1521,8 +1701,7 @@ void handlePostSchedule() {
   JsonDocument out;
   out["ok"] = true;
   out["entries"] = static_cast<unsigned>(entryCount);
-  out["groups"] = static_cast<unsigned>(groupCount);
-  out["overrides"] = static_cast<unsigned>(overrideCount);
+  out["packs"] = static_cast<unsigned>(packCount);
   String payload;
   serializeJson(out, payload);
   sendJson(200, payload);
