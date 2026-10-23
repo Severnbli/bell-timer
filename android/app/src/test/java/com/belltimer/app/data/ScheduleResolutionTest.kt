@@ -185,11 +185,48 @@ class ScheduleResolutionTest {
     }
 
     @Test
-    fun lessonGridBuildsBreaks() {
-        val lessons = LessonGrid(start = t("08:00"), count = 3, length = 45, breakMinutes = 10, longBreakAfter = 2, longBreakMinutes = 20)
-            .build { "$it урок" }!!
-        assertEquals(listOf("08:00", "08:55", "10:00"), lessons.map { minutesToTime(it.start) })
-        assertEquals("3 урок", lessons.last().label)
-        assertNull(LessonGrid(start = t("23:00"), count = 2).build { "" })
+    fun templateUsesItsOwnBreakAfterEachLesson() {
+        val template = LessonTemplate(
+            id = "t",
+            name = "Школа",
+            start = t("08:00"),
+            lessons = listOf(TemplateLesson(45, 10), TemplateLesson(45, 20), TemplateLesson(40, 15), TemplateLesson(45, 99)),
+        )
+        val lessons = template.build(WEEKDAYS) { "$it урок" }!!
+        assertEquals(listOf("08:00", "08:55", "10:00", "10:55"), lessons.map { minutesToTime(it.start) })
+        assertEquals(40, lessons[2].length)
+        assertEquals("4 урок", lessons.last().label)
+        assertEquals(t("11:40"), template.endMinute)
+        assertNull(template.copy(start = t("22:00")).build(WEEKDAYS) { "" })
+        assertNull(template.copy(name = " ").build(WEEKDAYS) { "" })
+    }
+
+    @Test
+    fun templateIsReadBackFromPackLessons() {
+        val source = BuiltInTemplates.all.first()
+        val modules = source.build(WEEKDAYS) { "$it" }!! + bell("12:00")
+        val read = LessonTemplate.fromModules("copy", "Копия", modules)!!
+        assertEquals(source.start, read.start)
+        assertEquals(source.lessons.dropLast(1), read.lessons.dropLast(1))
+        assertEquals(source.lessons.last().length, read.lessons.last().length)
+        assertNull(LessonTemplate.fromModules("x", "x", listOf(bell("12:00"))))
+    }
+
+    @Test
+    fun applyingTemplateReplacesOnlyLessons() {
+        val pack = SchedulePack(id = 1, modules = listOf(lesson("08:00"), lesson("09:00"), bell("12:00")))
+        val grid = BuiltInTemplates.all.first().build(WEEKDAYS) { "" }!!
+        val updated = pack.withLessons(grid, replace = true)
+        assertEquals(grid.size + 1, updated.modules.size)
+        assertEquals(1, updated.modules.count { it.type == ModuleType.Bell })
+        assertEquals(pack.modules.size + grid.size, pack.withLessons(grid, replace = false).modules.size)
+    }
+
+    @Test
+    fun builtInTemplatesAreValid() {
+        for (template in BuiltInTemplates.all) {
+            assertTrue(template.name, template.isValid)
+            assertTrue(template.builtIn)
+        }
     }
 }
