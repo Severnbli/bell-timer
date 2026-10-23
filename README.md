@@ -211,8 +211,13 @@ phone); add a release keystore if you need a Play-style signed build.
      bell N minutes before the start;
    * **Звонок** – one bell;
    * **Серия** – a bell every N minutes between two times.
-   "Сетка уроков" creates a whole day of lessons with breaks and a long break
-   at once. An **Основное** pack adds its bells; a **Коррекция** replaces the
+   "Сетка уроков" fills a pack from a **template**: every lesson has its own
+   length and every break its own duration. Built-in templates (school,
+   college, university) can be copied into your own ("Создать на основе"),
+   edited and deleted; a pack's current lessons can be saved as a template.
+   Applying a template to a pack that already has lessons updates its grid:
+   the lessons are replaced, bells and series stay. Templates are stored on
+   the phone. An **Основное** pack adds its bells; a **Коррекция** replaces the
    Основное packs above it on its dates; a **Выходной** (muted correction) cancels them.
    Packs can be limited to a date range, individual dates and a yearly repeat.
    Nothing is sent to the device until "Отправить" in the bottom bar; the app

@@ -45,6 +45,9 @@
   for its options, drag packs to reorder. Pack kinds are named "Основное" and
   "Коррекция".
 * Back from the Schedule or Settings tab returns to the main tab.
+* Lesson grid templates: each break has its own length; built-in templates
+  can be copied into editable own templates, a pack's lessons can be saved as
+  a template, and applying a template updates a pack's existing grid.
 
 
 ## Unreleased — schedule version 4 (packs)

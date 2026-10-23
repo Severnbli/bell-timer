@@ -21,7 +21,6 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -50,15 +49,11 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.belltimer.app.R
 import com.belltimer.app.data.LAST_MINUTE
-import com.belltimer.app.data.LessonGrid
 import com.belltimer.app.data.MAX_LESSON_MINUTES
-import com.belltimer.app.data.MAX_PACK_MODULES
 import com.belltimer.app.data.MAX_PRE_MINUTES
 import com.belltimer.app.data.MAX_SERIES_STEP
 import com.belltimer.app.data.ModuleType
 import com.belltimer.app.data.ScheduleModule
-import com.belltimer.app.data.SchedulePack
-import com.belltimer.app.data.WEEKDAYS
 import com.belltimer.app.data.labelTooLong
 import com.belltimer.app.data.minutesToTime
 
@@ -369,132 +364,3 @@ private fun moduleProblem(module: ScheduleModule): String = when {
 }
 
 private const val PREVIEW_BELLS = 12
-
-/** Generates a series of lessons in one go. */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun LessonGridSheet(
-    pack: SchedulePack,
-    onDismiss: () -> Unit,
-    onApply: (List<ScheduleModule>, Boolean) -> Unit,
-) {
-    var start by rememberSaveable { mutableIntStateOf(8 * 60) }
-    var count by rememberSaveable { mutableIntStateOf(6) }
-    var length by rememberSaveable { mutableIntStateOf(45) }
-    var breakMinutes by rememberSaveable { mutableIntStateOf(10) }
-    var longAfter by rememberSaveable { mutableIntStateOf(0) }
-    var longMinutes by rememberSaveable { mutableIntStateOf(20) }
-    var pre by rememberSaveable { mutableIntStateOf(0) }
-    var days by remember { mutableStateOf(pack.modules.lastOrNull()?.days ?: WEEKDAYS) }
-
-    val labelFormat = stringResource(R.string.grid_label)
-    val grid = LessonGrid(start, count, length, breakMinutes, longAfter, longMinutes, pre, days)
-    val lessons = grid.build { labelFormat.format(it) }
-    val fitsAppend = lessons != null && pack.modules.size + lessons.size <= MAX_PACK_MODULES
-    val fitsReplace = lessons != null && lessons.size <= MAX_PACK_MODULES
-
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-        Column(
-            modifier = Modifier
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp)
-                .padding(bottom = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text(stringResource(R.string.grid_title), style = MaterialTheme.typography.titleLarge)
-            Text(
-                stringResource(R.string.grid_hint),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            TimeField(
-                label = stringResource(R.string.grid_start),
-                minute = start,
-                onChange = { start = it },
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Stepper(stringResource(R.string.grid_count), count, 1..16, { count = it; if (longAfter >= it) longAfter = 0 })
-            Stepper(stringResource(R.string.grid_length), length, 5..240, { length = it }, step = 5, format = { durationText(it) })
-            Stepper(stringResource(R.string.grid_break), breakMinutes, 0..60, { breakMinutes = it }, format = { durationText(it) })
-            Stepper(
-                label = stringResource(R.string.grid_long_after),
-                value = longAfter,
-                range = 0..(count - 1).coerceAtLeast(0),
-                onChange = { longAfter = it },
-                format = { if (it == 0) stringResource(R.string.grid_long_none) else stringResource(R.string.grid_long_after_value, it) },
-            )
-            if (longAfter > 0) {
-                Stepper(
-                    stringResource(R.string.grid_long_minutes),
-                    longMinutes,
-                    0..120,
-                    { longMinutes = it },
-                    step = 5,
-                    format = { durationText(it) },
-                )
-            }
-            Stepper(
-                label = stringResource(R.string.module_pre),
-                value = pre,
-                range = 0..10,
-                onChange = { pre = it },
-                format = { if (it == 0) stringResource(R.string.grid_pre_none) else durationText(it) },
-            )
-            Caption(stringResource(R.string.module_days))
-            DayPicker(days = days, onChange = { days = it })
-
-            Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)) {
-                Column(modifier = Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Caption(stringResource(R.string.module_preview), color = MaterialTheme.colorScheme.onSecondaryContainer)
-                    if (lessons == null) {
-                        Text(
-                            stringResource(R.string.grid_invalid),
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    } else {
-                        for (lesson in lessons) {
-                            Row {
-                                Text(
-                                    text = lesson.timeRange(),
-                                    style = MaterialTheme.typography.bodyMedium.merge(Tabular),
-                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                Text(
-                                    text = lesson.label,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-            if (lessons != null && !fitsAppend && pack.modules.isNotEmpty()) {
-                Text(
-                    stringResource(R.string.grid_too_many, MAX_PACK_MODULES),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                if (pack.modules.isNotEmpty()) {
-                    FilledTonalButton(
-                        onClick = { lessons?.let { onApply(it, false) } },
-                        enabled = fitsAppend,
-                        modifier = Modifier.weight(1f),
-                    ) { Text(stringResource(R.string.grid_append)) }
-                }
-                Button(
-                    onClick = { lessons?.let { onApply(it, true) } },
-                    enabled = fitsReplace,
-                    modifier = Modifier.weight(1f),
-                ) {
-                    Text(stringResource(if (pack.modules.isEmpty()) R.string.grid_create else R.string.grid_replace))
-                }
-            }
-            Spacer(Modifier.navigationBarsPadding())
-        }
-    }
-}

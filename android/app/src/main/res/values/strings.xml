@@ -253,24 +253,51 @@
     <string name="role_end">конец</string>
     <string name="role_pre">предварительный</string>
 
+    <plurals name="lessons_count">
+        <item quantity="one">%1$d урок</item>
+        <item quantity="few">%1$d урока</item>
+        <item quantity="many">%1$d уроков</item>
+        <item quantity="other">%1$d урока</item>
+    </plurals>
+
+    <!-- Templates -->
+    <string name="templates_title">Шаблоны сетки</string>
+    <string name="templates_hint">Выберите шаблон, чтобы создать уроки. Свой шаблон можно сделать на основе любого.</string>
+    <string name="templates_hint_update">В пачке уже есть уроки: шаблон обновит сетку, звонки и серии останутся.</string>
+    <string name="templates_save_from_pack">Сохранить сетку пачки как шаблон</string>
+    <string name="templates_apply">Применить</string>
+    <string name="templates_apply_update">Обновить сетку</string>
+    <string name="templates_update_hint">Уроки пачки (%1$d) будут заменены уроками шаблона. Звонки и серии останутся.</string>
+    <string name="templates_applied">Сетка обновлена</string>
+    <string name="template_builtin">встроенный</string>
+    <string name="template_own">мой</string>
+    <string name="template_create_from">Создать на основе</string>
+    <string name="template_edit">Изменить</string>
+    <string name="template_new_title">Новый шаблон</string>
+    <string name="template_edit_title">Шаблон</string>
+    <string name="template_name">Название шаблона</string>
+    <string name="template_overview">День целиком</string>
+    <string name="template_lesson_number">%1$d урок</string>
+    <string name="template_add_lesson">Добавить урок</string>
+    <string name="template_break_line">перемена %1$s</string>
+    <string name="template_problem_name">Введите название шаблона</string>
+    <string name="template_saved">Шаблон «%1$s» сохранён</string>
+    <string name="template_deleted">Шаблон удалён</string>
+    <string name="template_delete_title">Удалить шаблон?</string>
+    <string name="template_delete_text">Шаблон «%1$s» будет удалён с телефона.</string>
+
     <!-- Lesson grid -->
     <string name="grid_title">Сетка уроков</string>
-    <string name="grid_hint">Создаёт уроки подряд с переменами между ними</string>
+    <string name="grid_hint">Уроки по шаблону: свои длительности уроков и перемен</string>
     <string name="grid_open">Сетка уроков</string>
     <string name="grid_start">Первый урок начинается</string>
-    <string name="grid_count">Уроков</string>
     <string name="grid_length">Урок</string>
     <string name="grid_break">Перемена</string>
-    <string name="grid_long_after">Большая перемена</string>
-    <string name="grid_long_after_value">после %1$d</string>
-    <string name="grid_long_none">нет</string>
-    <string name="grid_long_minutes">Длина большой перемены</string>
     <string name="grid_pre_none">нет</string>
     <string name="grid_label">%d урок</string>
     <string name="grid_invalid">Уроки не помещаются в сутки или не выбраны дни</string>
     <string name="grid_too_many">В пачку помещается не больше %1$d модулей</string>
     <string name="grid_append">Добавить</string>
-    <string name="grid_replace">Заменить всё</string>
     <string name="grid_create">Создать</string>
 
     <!-- Settings -->

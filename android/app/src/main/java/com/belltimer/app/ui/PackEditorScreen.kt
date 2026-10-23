@@ -60,9 +60,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.belltimer.app.AppViewModel
 import com.belltimer.app.R
 import com.belltimer.app.UiState
+import com.belltimer.app.data.LessonTemplate
 import com.belltimer.app.data.MAX_PACK_MODULES
 import com.belltimer.app.data.PackKind
 import com.belltimer.app.data.PackWindow
@@ -93,6 +95,10 @@ fun PackEditorScreen(
     var editing by rememberSaveable { mutableIntStateOf(NOT_EDITING) }
     var typeChooser by rememberSaveable { mutableStateOf(false) }
     var gridSheet by rememberSaveable { mutableStateOf(false) }
+    var applyingTemplateId by rememberSaveable { mutableStateOf<String?>(null) }
+    var editingTemplate by remember { mutableStateOf<Pair<LessonTemplate, Boolean>?>(null) }
+    val templates by viewModel.templates.collectAsStateWithLifecycle()
+    val gridApplied = stringResource(R.string.templates_applied)
     var windowDialog by rememberSaveable { mutableStateOf(false) }
     var shiftDialog by rememberSaveable { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
@@ -104,6 +110,7 @@ fun PackEditorScreen(
     val tooManyModules = stringResource(R.string.error_too_many_pack_modules)
     val tooManyPacks = stringResource(R.string.error_too_many_packs)
     val copySuffix = stringResource(R.string.pack_copy_suffix)
+    val packTitle = pack.displayName()
     val shiftOverflow = stringResource(R.string.shift_overflow)
     val muted = pack.kind == PackKind.Correction && pack.mute
 
@@ -278,13 +285,51 @@ fun PackEditorScreen(
         }
     }
     if (gridSheet) {
-        LessonGridSheet(
+        TemplatePickerSheet(
             pack = pack,
+            templates = templates,
             onDismiss = { gridSheet = false },
-            onApply = { modules, replace ->
+            onApply = {
                 gridSheet = false
-                val result = if (replace) modules else pack.modules + modules
-                update(pack.withModules(result), undoable = true)
+                applyingTemplateId = it.id
+            },
+            onCreateFrom = {
+                gridSheet = false
+                editingTemplate = it.copy(id = newTemplateId(), name = "${it.name} $copySuffix") to true
+            },
+            onEdit = {
+                gridSheet = false
+                editingTemplate = it to false
+            },
+            onDelete = { viewModel.deleteTemplate(it.id) },
+            onSaveFromPack = {
+                gridSheet = false
+                LessonTemplate.fromModules(newTemplateId(), packTitle, pack.modules)?.let {
+                    editingTemplate = it to true
+                }
+            },
+        )
+    }
+    templates.firstOrNull { it.id == applyingTemplateId }?.let { template ->
+        ApplyTemplateSheet(
+            pack = pack,
+            template = template,
+            onDismiss = { applyingTemplateId = null },
+            onApply = {
+                applyingTemplateId = null
+                update(it, undoable = true, message = gridApplied)
+            },
+        )
+    }
+    editingTemplate?.let { (template, isNew) ->
+        TemplateEditorDialog(
+            initial = template,
+            isNew = isNew,
+            onDismiss = { editingTemplate = null },
+            onSave = {
+                editingTemplate = null
+                viewModel.saveTemplate(it)
+                gridSheet = true
             },
         )
     }

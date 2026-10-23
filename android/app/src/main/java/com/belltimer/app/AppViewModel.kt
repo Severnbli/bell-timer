@@ -7,6 +7,9 @@ import com.belltimer.app.data.ApiClient
 import com.belltimer.app.data.ApiException
 import com.belltimer.app.data.AppSettings
 import com.belltimer.app.data.BellSchedule
+import com.belltimer.app.data.BuiltInTemplates
+import com.belltimer.app.data.LessonTemplate
+import com.belltimer.app.data.TemplateStore
 import com.belltimer.app.data.DEFAULT_RING_SECONDS
 import com.belltimer.app.data.DeviceStatus
 import com.belltimer.app.data.MAX_RING_SECONDS
@@ -23,6 +26,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -82,6 +88,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _state = MutableStateFlow(UiState(settings = initialSettings))
     val state: StateFlow<UiState> = _state.asStateFlow()
+
+    private val templateStore = TemplateStore(application)
+    private val customTemplates = MutableStateFlow(templateStore.load())
+
+    /** Built-in templates first, then the user's own in creation order. */
+    val templates: StateFlow<List<LessonTemplate>> = customTemplates
+        .map { BuiltInTemplates.all + it }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, BuiltInTemplates.all + customTemplates.value)
 
     private var pollJob: Job? = null
     private var undoSnapshot: BellSchedule? = null
@@ -393,6 +407,29 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             undoable = true,
             message = text(R.string.schedule_import_success, imported.totalModules),
         )
+    }
+
+    // ------------------------------ Templates ----------------------------
+
+    /** Adds a new template or replaces the user's template with the same id. */
+    fun saveTemplate(template: LessonTemplate) {
+        if (template.builtIn) return
+        val current = customTemplates.value
+        val updated = if (current.any { it.id == template.id }) {
+            current.map { if (it.id == template.id) template else it }
+        } else {
+            current + template
+        }
+        customTemplates.value = updated
+        templateStore.save(updated)
+        reportMessage(text(R.string.template_saved, template.name))
+    }
+
+    fun deleteTemplate(id: String) {
+        val updated = customTemplates.value.filterNot { it.id == id }
+        customTemplates.value = updated
+        templateStore.save(updated)
+        reportMessage(text(R.string.template_deleted))
     }
 
     // ------------------------------ Settings -----------------------------
