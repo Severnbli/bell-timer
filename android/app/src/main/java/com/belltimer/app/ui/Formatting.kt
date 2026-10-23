@@ -12,6 +12,7 @@ import androidx.compose.ui.res.stringResource
 import com.belltimer.app.R
 import com.belltimer.app.data.ALL_DAYS
 import com.belltimer.app.data.BellRole
+import com.belltimer.app.data.LessonTemplate
 import com.belltimer.app.data.ModuleType
 import com.belltimer.app.data.PackWindow
 import com.belltimer.app.data.ScheduleModule
@@ -25,32 +26,29 @@ import java.time.format.TextStyle
 import java.util.Locale
 import kotlin.math.abs
 
-private val RU = Locale.forLanguageTag("ru")
+// Formatters follow the current language, which can change at run time.
+private fun locale(): Locale = Locale.getDefault()
+private fun pattern(value: String): DateTimeFormatter = DateTimeFormatter.ofPattern(value, locale())
 private val CLOCK = DateTimeFormatter.ofPattern("HH:mm")
 private val CLOCK_SECONDS = DateTimeFormatter.ofPattern("ss")
-private val SHORT_DATE = DateTimeFormatter.ofPattern("d MMM", RU)
-private val FULL_DATE = DateTimeFormatter.ofPattern("d MMMM yyyy", RU)
-private val LONG_DAY = DateTimeFormatter.ofPattern("EEEE, d MMMM", RU)
-private val MONTH_YEAR = DateTimeFormatter.ofPattern("LLLL yyyy", RU)
-private val DATE_TIME = DateTimeFormatter.ofPattern("d MMM, HH:mm", RU)
 
 fun LocalDateTime.clock(): String = format(CLOCK)
 
 fun LocalDateTime.clockSeconds(): String = format(CLOCK_SECONDS)
 
-fun LocalDateTime.shortDateTime(): String = format(DATE_TIME)
+fun LocalDateTime.shortDateTime(): String = format(pattern("d MMM, HH:mm"))
 
-fun LocalDate.shortDate(): String = format(SHORT_DATE)
+fun LocalDate.shortDate(): String = format(pattern("d MMM"))
 
-fun LocalDate.fullDate(): String = format(FULL_DATE)
+fun LocalDate.fullDate(): String = format(pattern("d MMMM yyyy"))
 
-fun LocalDate.longDay(): String = format(LONG_DAY).replaceFirstChar { it.titlecase(RU) }
+fun LocalDate.longDay(): String = format(pattern("EEEE, d MMMM")).replaceFirstChar { it.titlecase(locale()) }
 
-fun LocalDate.monthTitle(): String = format(MONTH_YEAR).replaceFirstChar { it.titlecase(RU) }
+fun LocalDate.monthTitle(): String = format(pattern("LLLL yyyy")).replaceFirstChar { it.titlecase(locale()) }
 
 fun weekdayShort(day: Int): String =
-    java.time.DayOfWeek.of(day).getDisplayName(TextStyle.SHORT_STANDALONE, RU)
-        .replaceFirstChar { it.titlecase(RU) }
+    java.time.DayOfWeek.of(day).getDisplayName(TextStyle.SHORT_STANDALONE, locale())
+        .replaceFirstChar { it.titlecase(locale()) }
 
 /** "Пн–Пт", "Каждый день", "Пн, Ср, Пт". */
 @Composable
@@ -162,6 +160,16 @@ fun windowSummary(window: PackWindow): String {
     }
     if (window.yearly) parts += stringResource(R.string.window_yearly_short)
     return parts.joinToString(" · ")
+}
+
+/** Built-in templates are named in the app language; own ones as typed. */
+@Composable
+fun LessonTemplate.displayName(): String = when (id) {
+    "${LessonTemplate.BUILT_IN_PREFIX}school45" -> stringResource(R.string.template_school45)
+    "${LessonTemplate.BUILT_IN_PREFIX}school40" -> stringResource(R.string.template_school40)
+    "${LessonTemplate.BUILT_IN_PREFIX}college" -> stringResource(R.string.template_college)
+    "${LessonTemplate.BUILT_IN_PREFIX}university" -> stringResource(R.string.template_university)
+    else -> name
 }
 
 @Composable

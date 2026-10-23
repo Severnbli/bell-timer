@@ -52,6 +52,8 @@ data class DeviceStatus(
     val errors: List<String>,
     val fw: String,
     val api: Int,
+    /** Access point name; null on firmware before the network settings. */
+    val ssid: String? = null,
 ) {
     val isAuto: Boolean get() = mode == "auto"
     val supportsModules: Boolean get() = api >= API_MODULES
@@ -113,6 +115,7 @@ data class StatusDto(
     val synced: String? = null,
     val errors: List<String> = emptyList(),
     val fw: String = "",
+    val ssid: String? = null,
     /** API level of the firmware; absent on the oldest builds, which speak level 2. */
     val api: Int = 2,
 )
@@ -188,6 +191,25 @@ data class TimeRequest(val datetime: String)
 data class SettingsRequest(@SerialName("ring_default") val ringDefault: Int)
 
 @Serializable
+data class NetworkDto(
+    val ssid: String = "",
+    val channel: Int = 0,
+    val open: Boolean = false,
+    @SerialName("token_set") val tokenSet: Boolean = false,
+)
+
+/** Only the fields that are not null are changed on the device. */
+@Serializable
+data class NetworkUpdateDto(
+    val ssid: String? = null,
+    val password: String? = null,
+    val token: String? = null,
+)
+
+@Serializable
+data class ResetRequest(val network: Boolean)
+
+@Serializable
 data class SettingsDto(@SerialName("ring_default") val ringDefault: Int = DEFAULT_RING_SECONDS)
 
 @Serializable
@@ -200,6 +222,9 @@ data class ApiResponse(
     val ringing: Boolean? = null,
     @SerialName("ring_left") val ringLeft: Int? = null,
     @SerialName("ring_default") val ringDefault: Int? = null,
+    /** POST /network and /reset: the access point restarts shortly. */
+    val restart: Boolean? = null,
+    val ssid: String? = null,
 )
 
 // ------------------------------- Mapping -----------------------------------
@@ -218,6 +243,7 @@ fun StatusDto.toDomain(): DeviceStatus = DeviceStatus(
     errors = errors,
     fw = fw,
     api = api,
+    ssid = ssid,
 )
 
 private fun NextBellDto.toDomain(): DeviceNextBell? {

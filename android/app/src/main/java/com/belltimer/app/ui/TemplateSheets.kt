@@ -153,7 +153,7 @@ fun TemplatePickerSheet(
     confirmDelete?.let { template ->
         ConfirmDialog(
             title = stringResource(R.string.template_delete_title),
-            text = stringResource(R.string.template_delete_text, template.name),
+            text = stringResource(R.string.template_delete_text, template.displayName()),
             confirm = stringResource(R.string.delete),
             onConfirm = { onDelete(template) },
             onDismiss = { confirmDelete = null },
@@ -179,7 +179,7 @@ private fun TemplateCard(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        template.name,
+                        template.displayName(),
                         style = MaterialTheme.typography.titleMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -412,7 +412,7 @@ fun ApplyTemplateSheet(
                 .padding(bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(template.name, style = MaterialTheme.typography.titleLarge)
+            Text(template.displayName(), style = MaterialTheme.typography.titleLarge)
             if (existingLessons.isNotEmpty()) {
                 Text(
                     stringResource(R.string.templates_update_hint, existingLessons.size),

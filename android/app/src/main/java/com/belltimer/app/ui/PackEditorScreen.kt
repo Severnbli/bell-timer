@@ -98,6 +98,7 @@ fun PackEditorScreen(
     var applyingTemplateId by rememberSaveable { mutableStateOf<String?>(null) }
     var editingTemplate by remember { mutableStateOf<Pair<LessonTemplate, Boolean>?>(null) }
     val templates by viewModel.templates.collectAsStateWithLifecycle()
+    val builtInNames = templates.filter { it.builtIn }.associate { it.id to it.displayName() }
     val gridApplied = stringResource(R.string.templates_applied)
     var windowDialog by rememberSaveable { mutableStateOf(false) }
     var shiftDialog by rememberSaveable { mutableStateOf(false) }
@@ -295,7 +296,8 @@ fun PackEditorScreen(
             },
             onCreateFrom = {
                 gridSheet = false
-                editingTemplate = it.copy(id = newTemplateId(), name = "${it.name} $copySuffix") to true
+                val name = builtInNames[it.id] ?: it.name
+                editingTemplate = it.copy(id = newTemplateId(), name = "$name $copySuffix") to true
             },
             onEdit = {
                 gridSheet = false

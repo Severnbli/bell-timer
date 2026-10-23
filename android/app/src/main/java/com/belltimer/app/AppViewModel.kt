@@ -13,6 +13,8 @@ import com.belltimer.app.data.TemplateStore
 import com.belltimer.app.data.DEFAULT_RING_SECONDS
 import com.belltimer.app.data.DeviceStatus
 import com.belltimer.app.data.MAX_RING_SECONDS
+import com.belltimer.app.data.NetworkDto
+import com.belltimer.app.data.NetworkUpdateDto
 import com.belltimer.app.data.MIN_RING_SECONDS
 import com.belltimer.app.data.ScheduleCodec
 import com.belltimer.app.data.ScheduleIssue
@@ -59,6 +61,8 @@ data class UiState(
     val message: String? = null,
     val undoAvailable: Boolean = false,
     val scheduleIssue: ScheduleIssue? = null,
+    /** Access point settings read from the device; null until loaded. */
+    val network: NetworkDto? = null,
 ) {
     val online: Boolean get() = connection == ConnectionState.Online
 
@@ -106,8 +110,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         api.updateSettings(initialSettings)
     }
 
+    /** Messages follow the language chosen in the app, not only the system one. */
     private fun text(id: Int, vararg args: Any): String =
-        getApplication<Application>().getString(id, *args)
+        AppLocale.wrap(getApplication()).getString(id, *args)
 
     // ------------------------------ Polling ------------------------------
 
@@ -483,8 +488,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      * Wipes the schedule and the settings on the device. The app adopts the
      * device defaults and drops any unsent edits.
      */
-    fun factoryReset() = action {
-        val response = api.factoryReset()
+    fun factoryReset(network: Boolean) = action {
+        val response = api.factoryReset(network)
         if (!response.ok) throw ApiException.Http(500, response.error ?: "storage_error")
         val updated = _state.value.settings.copy(ringDefault = DEFAULT_RING_SECONDS)
         store.save(updated)
@@ -498,10 +503,60 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 scheduleLoaded = true,
                 undoAvailable = false,
                 scheduleIssue = null,
-                message = text(R.string.reset_done),
+                network = null,
+                message = text(if (response.restart == true) R.string.reset_done_network else R.string.reset_done),
             )
         }
-        applyStatus(api.getStatus().toDomain())
+        // After a network reset the access point restarts; the next poll
+        // reconnects once the phone has joined it again.
+        if (response.restart != true) applyStatus(api.getStatus().toDomain())
+    }
+
+    // ------------------------------- Network -----------------------------
+
+    fun loadNetwork() {
+        viewModelScope.launch {
+            try {
+                val network = api.getNetwork()
+                _state.update { it.copy(network = network) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                // Older firmware has no /network; the card stays hidden.
+            }
+        }
+    }
+
+    /**
+     * Changes the access point and the token on the device. A null [password]
+     * or [token] keeps the current value; an empty one makes the network open
+     * or turns the token off. When the token changes, the app switches to it
+     * right away so it keeps access.
+     */
+    fun saveNetwork(ssid: String, password: String?, token: String?) = action {
+        val response = api.saveNetwork(NetworkUpdateDto(ssid = ssid.trim(), password = password, token = token))
+        if (!response.ok) throw ApiException.Http(400, response.error ?: "invalid_request")
+        if (token != null) {
+            val updated = _state.value.settings.copy(token = token)
+            store.save(updated)
+            api.updateSettings(updated)
+            _state.update { it.copy(settings = updated) }
+        }
+        val restart = response.restart == true
+        _state.update {
+            it.copy(
+                network = it.network?.copy(
+                    ssid = response.ssid ?: ssid,
+                    open = if (password != null) password.isEmpty() else it.network.open,
+                    tokenSet = if (token != null) token.isNotEmpty() else it.network.tokenSet,
+                ),
+                message = if (restart) {
+                    text(R.string.network_saved_restart, response.ssid ?: ssid)
+                } else {
+                    text(R.string.network_saved)
+                },
+            )
+        }
     }
 
     fun clearMessage() {
@@ -560,6 +615,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             "storage_error" -> text(R.string.error_storage_device)
             "rtc_not_found" -> text(R.string.device_error_rtc_not_found)
             "invalid_date" -> text(R.string.error_invalid_date)
+            "invalid_ssid" -> text(R.string.network_invalid_ssid)
+            "invalid_password" -> text(R.string.network_invalid_password)
+            "invalid_token" -> text(R.string.network_invalid_token)
             else -> if (e.code >= 500) {
                 text(R.string.error_http, e.code)
             } else {

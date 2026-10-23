@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Bell timer</string>
+    <string name="app_name" translatable="false">Bell timer</string>
 
     <!-- Navigation -->
     <string name="tab_now">Сейчас</string>
@@ -270,6 +270,10 @@
     <string name="templates_update_hint">Уроки пачки (%1$d) будут заменены уроками шаблона. Звонки и серии останутся.</string>
     <string name="templates_applied">Сетка обновлена</string>
     <string name="template_builtin">встроенный</string>
+    <string name="template_school45">Школа, 45 мин</string>
+    <string name="template_school40">Школа, 40 мин</string>
+    <string name="template_college">Колледж, пары 2×45</string>
+    <string name="template_university">Вуз, пары 90 мин</string>
     <string name="template_own">мой</string>
     <string name="template_create_from">Создать на основе</string>
     <string name="template_edit">Изменить</string>
@@ -315,6 +319,38 @@
     <string name="reset_confirm_text">Всё расписание будет удалено с устройства без возможности восстановления. Сохраните его через «Экспорт», если оно ещё понадобится.</string>
     <string name="reset_confirm">Сбросить</string>
     <string name="reset_done">Устройство сброшено к заводским настройкам</string>
+    <string name="reset_done_network">Устройство сброшено. Точка доступа перезапускается с заводскими именем и паролем — подключите телефон к ней заново.</string>
+    <string name="reset_network">Также сбросить Wi-Fi и токен</string>
+
+    <string name="network_title">Точка доступа и токен</string>
+    <string name="network_current">Сейчас: «%1$s», %2$s, %3$s</string>
+    <string name="network_state_open">без пароля</string>
+    <string name="network_state_protected">с паролем</string>
+    <string name="network_state_token">токен включён</string>
+    <string name="network_state_no_token">без токена</string>
+    <string name="network_ssid">Имя сети (SSID)</string>
+    <string name="network_open">Открытая сеть</string>
+    <string name="network_open_hint">Подключаться без пароля — не рекомендуется</string>
+    <string name="network_password">Новый пароль Wi-Fi</string>
+    <string name="network_password_required">Задайте пароль</string>
+    <string name="network_keep_current">Оставить текущий</string>
+    <string name="network_show_password">Показать пароль</string>
+    <string name="network_no_token">Без токена</string>
+    <string name="network_no_token_hint">Управлять устройством может любой, кто подключён к его сети</string>
+    <string name="network_token">Новый токен доступа</string>
+    <string name="network_token_required">Задайте токен</string>
+    <string name="network_apply">Применить на устройстве</string>
+    <string name="network_confirm_title">Изменить настройки сети?</string>
+    <string name="network_confirm_restart">Точка доступа перезапустится как «%1$s». Телефон отключится — подключите его к новой сети с новым паролем.</string>
+    <string name="network_confirm_token">Новый токен начнёт действовать сразу. Приложение переключится на него само; другим клиентам понадобится новый токен.</string>
+    <string name="network_saved">Настройки сети сохранены</string>
+    <string name="network_saved_restart">Точка доступа перезапускается. Подключите телефон к сети «%1$s».</string>
+    <string name="network_invalid_ssid">Имя сети: от 1 до 32 байт</string>
+    <string name="network_invalid_password">Пароль: от 8 до 63 символов</string>
+    <string name="network_invalid_token">Токен: до 64 латинских букв, цифр и знаков, без пробелов</string>
+
+    <string name="language_title">Язык</string>
+    <string name="language_system">Как в системе</string>
     <string name="settings_time_title">Время</string>
     <string name="settings_auto_sync">Автосинхронизация</string>
     <string name="settings_auto_sync_hint">Выставлять время с телефона, если на устройстве оно сбилось больше чем на минуту</string>
