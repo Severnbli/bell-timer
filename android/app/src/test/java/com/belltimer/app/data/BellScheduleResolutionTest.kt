@@ -12,109 +12,219 @@ class BellScheduleResolutionTest {
     private val monday = LocalDate.of(2026, 10, 19)
     private val tuesday = LocalDate.of(2026, 10, 20)
     private val saturday = LocalDate.of(2026, 10, 24)
+    private val sunday = LocalDate.of(2026, 10, 25)
 
-    private fun bell(time: String, duration: Int = 5, label: String = "") =
-        BellEntry(time = time, days = emptySet(), duration = duration, label = label)
+    private fun bell(
+        time: String,
+        pair: String? = null,
+        days: Set<Int> = WEEKDAYS,
+        label: String = "",
+    ) = BellEntry(time = time, pair = pair, days = days, label = label)
 
-    private fun weekdays(vararg times: String) = ScheduleGroup(
-        id = 1,
-        name = "Будни",
-        days = WEEKDAYS,
-        entries = times.map { bell(it) },
+    private fun base(
+        id: Int = 1,
+        entries: List<BellEntry> = emptyList(),
+        enabled: Boolean = true,
+        window: PackWindow = PackWindow(),
+        name: String = "",
+    ) = SchedulePack(
+        id = id,
+        name = name,
+        kind = PackKind.Base,
+        enabled = enabled,
+        window = window,
+        entries = entries,
+    )
+
+    private fun correction(
+        id: Int = 2,
+        entries: List<BellEntry> = emptyList(),
+        enabled: Boolean = true,
+        window: PackWindow = PackWindow(),
+        mute: Boolean = false,
+    ) = SchedulePack(
+        id = id,
+        name = "Коррекция",
+        kind = PackKind.Correction,
+        enabled = enabled,
+        window = window,
+        entries = entries,
+        mute = mute,
     )
 
     private fun times(date: LocalDate, schedule: BellSchedule): List<String> =
         schedule.bellsFor(date).map { it.time }
 
     @Test
-    fun `auto window outside range rings nothing`() {
+    fun `base pack rings only on the weekdays of its entries`() {
         val schedule = BellSchedule(
-            groups = listOf(weekdays("08:00")),
-            auto = AutoWindow(start = tuesday, stop = LocalDate.of(2026, 10, 23)),
+            packs = listOf(base(entries = listOf(bell("08:00"), bell("09:00")))),
+        )
+        assertEquals(listOf("08:00", "09:00"), times(monday, schedule))
+        assertTrue(schedule.bellsFor(saturday).isEmpty())
+    }
+
+    @Test
+    fun `disabled pack is ignored`() {
+        val schedule = BellSchedule(
+            packs = listOf(base(entries = listOf(bell("08:00")), enabled = false)),
+        )
+        assertTrue(schedule.bellsFor(monday).isEmpty())
+    }
+
+    @Test
+    fun `correction cancels the base packs above it`() {
+        val schedule = BellSchedule(
+            packs = listOf(
+                base(id = 1, entries = listOf(bell("08:00", days = ALL_DAYS))),
+                correction(id = 2, entries = listOf(bell("10:00", days = setOf(1)))),
+            ),
+        )
+        assertEquals(listOf("10:00"), times(monday, schedule))
+        assertEquals(listOf("08:00"), times(saturday, schedule))
+    }
+
+    @Test
+    fun `base pack below a correction still rings`() {
+        val schedule = BellSchedule(
+            packs = listOf(
+                base(id = 1, entries = listOf(bell("08:00"))),
+                correction(id = 2, entries = listOf(bell("10:00"))),
+                base(id = 3, entries = listOf(bell("11:00"))),
+            ),
+        )
+        assertEquals(listOf("10:00", "11:00"), times(monday, schedule))
+    }
+
+    @Test
+    fun `correction without bells for today does not cancel`() {
+        val schedule = BellSchedule(
+            packs = listOf(
+                base(id = 1, entries = listOf(bell("08:00", days = ALL_DAYS))),
+                correction(id = 2, entries = listOf(bell("10:00", days = setOf(6)))),
+            ),
+        )
+        assertEquals(listOf("08:00"), times(monday, schedule))
+        assertEquals(listOf("10:00"), times(saturday, schedule))
+    }
+
+    @Test
+    fun `mute correction cancels the base packs above it`() {
+        val schedule = BellSchedule(
+            packs = listOf(
+                base(id = 1, entries = listOf(bell("08:00"))),
+                correction(id = 2, mute = true, window = PackWindow(dates = setOf(monday))),
+            ),
         )
         assertTrue(schedule.bellsFor(monday).isEmpty())
         assertEquals(listOf("08:00"), times(tuesday, schedule))
-        assertTrue(schedule.bellsFor(saturday).isEmpty())
     }
 
     @Test
-    fun `weekday match picks the schedule`() {
-        val schedule = BellSchedule(groups = listOf(weekdays("08:00", "09:00")))
-        assertEquals(listOf("08:00", "09:00"), times(monday, schedule))
-        assertTrue(schedule.bellsFor(saturday).isEmpty())
-    }
-
-    @Test
-    fun `mute override removes every bell`() {
+    fun `date range limits a pack`() {
         val schedule = BellSchedule(
-            groups = listOf(weekdays("08:00")),
-            overrides = listOf(DayOverride(tuesday, DayOverrideMode.Mute)),
+            packs = listOf(
+                base(
+                    entries = listOf(bell("08:00", days = ALL_DAYS)),
+                    window = PackWindow(from = tuesday, to = saturday),
+                ),
+            ),
+        )
+        assertTrue(schedule.bellsFor(monday).isEmpty())
+        assertEquals(listOf("08:00"), times(tuesday, schedule))
+        assertEquals(listOf("08:00"), times(saturday, schedule))
+        assertTrue(schedule.bellsFor(sunday).isEmpty())
+    }
+
+    @Test
+    fun `individual dates limit a pack`() {
+        val schedule = BellSchedule(
+            packs = listOf(
+                base(
+                    entries = listOf(bell("08:00", days = ALL_DAYS)),
+                    window = PackWindow(dates = setOf(saturday)),
+                ),
+            ),
+        )
+        assertTrue(schedule.bellsFor(monday).isEmpty())
+        assertEquals(listOf("08:00"), times(saturday, schedule))
+    }
+
+    @Test
+    fun `yearly range wraps over new year`() {
+        val schedule = BellSchedule(
+            packs = listOf(
+                base(
+                    entries = listOf(bell("08:00", days = ALL_DAYS)),
+                    window = PackWindow(
+                        from = LocalDate.of(2025, 12, 1),
+                        to = LocalDate.of(2026, 2, 28),
+                        yearly = true,
+                    ),
+                ),
+            ),
+        )
+        assertEquals(listOf("08:00"), times(LocalDate.of(2027, 1, 15), schedule))
+        assertEquals(listOf("08:00"), times(LocalDate.of(2027, 12, 5), schedule))
+        assertTrue(schedule.bellsFor(LocalDate.of(2027, 3, 1)).isEmpty())
+    }
+
+    @Test
+    fun `yearly individual date repeats by month and day`() {
+        val schedule = BellSchedule(
+            packs = listOf(
+                base(
+                    entries = listOf(bell("08:00", days = ALL_DAYS)),
+                    window = PackWindow(dates = setOf(LocalDate.of(2025, 10, 19)), yearly = true),
+                ),
+            ),
         )
         assertEquals(listOf("08:00"), times(monday, schedule))
         assertTrue(schedule.bellsFor(tuesday).isEmpty())
     }
 
     @Test
-    fun `replace override ignores the weekday schedule`() {
+    fun `pair expands into a second bell with the same weekdays`() {
         val schedule = BellSchedule(
-            groups = listOf(weekdays("08:00", "09:00")),
-            overrides = listOf(
-                DayOverride(
-                    date = saturday,
-                    mode = DayOverrideMode.Replace,
-                    entries = listOf(bell("10:00", 10)),
-                    basedOnGroupId = 1,
-                ),
-            ),
+            packs = listOf(base(entries = listOf(bell("08:00", pair = "08:45")))),
         )
-        assertEquals(listOf("10:00"), times(saturday, schedule))
-        assertEquals(listOf("08:00", "09:00"), times(monday, schedule))
+        assertEquals(listOf("08:00", "08:45"), times(monday, schedule))
+        assertTrue(schedule.bellsFor(saturday).isEmpty())
     }
 
     @Test
-    fun `add override appends extra bells to the normal schedule`() {
+    fun `same minute merge keeps one bell`() {
         val schedule = BellSchedule(
-            groups = listOf(weekdays("08:00", "09:00")),
-            overrides = listOf(
-                DayOverride(
-                    date = monday,
-                    mode = DayOverrideMode.Add,
-                    entries = listOf(bell("12:30", 10, "Доп. звонок")),
+            packs = listOf(
+                base(
+                    entries = listOf(
+                        bell("08:00", pair = "08:45", label = "первый"),
+                        bell("08:45", label = "второй"),
+                    ),
                 ),
-            ),
-        )
-        assertEquals(listOf("08:00", "09:00", "12:30"), times(monday, schedule))
-        assertEquals(10, schedule.bellsFor(monday).last().duration)
-    }
-
-    @Test
-    fun `same minute merge keeps the longer duration`() {
-        val schedule = BellSchedule(
-            groups = listOf(ScheduleGroup(id = 1, days = WEEKDAYS, entries = listOf(bell("08:00", 5)))),
-            overrides = listOf(
-                DayOverride(monday, DayOverrideMode.Add, listOf(bell("08:00", 25))),
             ),
         )
         val bells = schedule.bellsFor(monday)
-        assertEquals(1, bells.size)
-        assertEquals(25, bells.first().duration)
+        assertEquals(listOf("08:00", "08:45"), bells.map { it.time })
+        assertEquals(1, bells.count { it.time == "08:45" })
     }
 
     @Test
-    fun `entry level weekdays still restrict a legacy bell`() {
-        val group = ScheduleGroup(
-            id = 1,
-            days = WEEKDAYS,
-            entries = listOf(bell("08:00").copy(days = setOf(1))),
+    fun `appliesOn reflects enable, window and weekday`() {
+        val pack = base(
+            entries = listOf(bell("08:00", days = setOf(1))),
+            window = PackWindow(dates = setOf(monday)),
         )
-        val schedule = BellSchedule(groups = listOf(group))
-        assertEquals(listOf("08:00"), times(monday, schedule))
-        assertTrue(schedule.bellsFor(tuesday).isEmpty())
+        assertTrue(pack.appliesOn(monday))
+        assertTrue(!pack.appliesOn(tuesday))
+        assertTrue(!pack.copy(enabled = false).appliesOn(monday))
     }
 
     @Test
     fun `next bell looks past today`() {
-        val schedule = BellSchedule(groups = listOf(weekdays("08:00", "09:00")))
+        val schedule = BellSchedule(
+            packs = listOf(base(entries = listOf(bell("08:00"), bell("09:00")))),
+        )
         val next = schedule.nextBell(LocalDateTime.of(2026, 10, 19, 8, 30))
         assertEquals(LocalDateTime.of(2026, 10, 19, 9, 0), next?.at)
 
@@ -123,27 +233,42 @@ class BellScheduleResolutionTest {
     }
 
     @Test
-    fun `overlapping weekdays are reported`() {
-        val schedule = BellSchedule(
-            groups = listOf(
-                ScheduleGroup(id = 1, days = setOf(1, 2)),
-                ScheduleGroup(id = 2, days = setOf(2, 3)),
-            ),
-        )
-        val overlap = schedule.firstOverlap()
-        assertEquals(2, overlap?.day)
-        assertEquals(1, overlap?.groupId)
-        assertEquals(2, overlap?.otherGroupId)
-        assertTrue(schedule.validate(deviceApi = 3) is ScheduleIssue.OverlappingWeekdays)
+    fun `packs need firmware api 4`() {
+        val schedule = BellSchedule(packs = listOf(base(entries = listOf(bell("08:00")))))
+        assertNull(schedule.validate(deviceApi = 4))
+        assertTrue(schedule.validate(deviceApi = 3) is ScheduleIssue.FirmwareTooOld)
     }
 
     @Test
-    fun `special days need firmware api 3`() {
-        val withOverride = BellSchedule(
-            groups = listOf(weekdays("08:00")),
-            overrides = listOf(DayOverride(saturday, DayOverrideMode.Mute)),
+    fun `limits are validated`() {
+        val tooManyPacks = BellSchedule(
+            packs = (1..MAX_PACKS + 1).map { base(id = it) },
         )
-        assertNull(withOverride.validate(deviceApi = 3))
-        assertTrue(withOverride.validate(deviceApi = 2) is ScheduleIssue.FirmwareTooOld)
+        assertTrue(tooManyPacks.validate(4) is ScheduleIssue.TooManyPacks)
+
+        val tooManyEntries = BellSchedule(
+            packs = listOf(
+                base(entries = (1..MAX_PACK_ENTRIES + 1).map { bell("08:00") }),
+            ),
+        )
+        assertTrue(tooManyEntries.validate(4) is ScheduleIssue.TooManyPackEntries)
+
+        val tooManyDates = BellSchedule(
+            packs = listOf(
+                base(
+                    window = PackWindow(
+                        dates = (1..MAX_PACK_DATES + 1)
+                            .map { monday.plusDays(it.toLong()) }
+                            .toSet(),
+                    ),
+                ),
+            ),
+        )
+        assertTrue(tooManyDates.validate(4) is ScheduleIssue.TooManyPackDates)
+
+        val invalidWindow = BellSchedule(
+            packs = listOf(base(window = PackWindow(from = saturday, to = monday))),
+        )
+        assertTrue(invalidWindow.validate(4) is ScheduleIssue.PackWindowInvalid)
     }
 }

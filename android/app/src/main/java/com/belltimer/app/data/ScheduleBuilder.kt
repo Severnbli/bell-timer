@@ -27,9 +27,8 @@ data class BuilderSpec(
     val startMinute: Int = 8 * 60,
     val rows: List<LessonRow> = emptyList(),
     val pattern: BellPattern = BellPattern.StartAndEnd,
-    val durationSeconds: Int = DEFAULT_RING_SECONDS,
     val existingEntries: Int = 0,
-    val maxEntries: Int = MAX_SCHEDULE_ENTRIES,
+    val maxEntries: Int = MAX_PACK_ENTRIES,
 )
 
 data class BuilderResult(
@@ -73,6 +72,7 @@ object ScheduleBuilder {
 
     fun build(
         spec: BuilderSpec,
+        days: Set<Int> = ALL_DAYS,
         labelStart: (Int) -> String = { "" },
         labelEnd: (Int) -> String = { "" },
     ): BuilderResult {
@@ -87,16 +87,15 @@ object ScheduleBuilder {
             return BuilderResult(issues = issues)
         }
 
-        val duration = spec.durationSeconds.coerceIn(MIN_RING_SECONDS, MAX_RING_SECONDS)
         val raw = mutableListOf<BellEntry>()
         for (span in spans) {
             when (spec.pattern) {
                 BellPattern.StartAndEnd -> {
-                    raw += bell(span.start, labelStart(span.number), duration)
-                    raw += bell(span.end, labelEnd(span.number), duration)
+                    raw += bell(span.start, labelStart(span.number), days)
+                    raw += bell(span.end, labelEnd(span.number), days)
                 }
-                BellPattern.StartOnly -> raw += bell(span.start, labelStart(span.number), duration)
-                BellPattern.EndOnly -> raw += bell(span.end, labelEnd(span.number), duration)
+                BellPattern.StartOnly -> raw += bell(span.start, labelStart(span.number), days)
+                BellPattern.EndOnly -> raw += bell(span.end, labelEnd(span.number), days)
             }
         }
         // A zero-minute break puts the end of one lesson on the same minute as
@@ -107,6 +106,6 @@ object ScheduleBuilder {
         return BuilderResult(entries = entries, issues = issues)
     }
 
-    private fun bell(minute: Int, label: String, duration: Int): BellEntry =
-        BellEntry(time = minutesToTime(minute), days = emptySet(), duration = duration, label = label)
+    private fun bell(minute: Int, label: String, days: Set<Int>): BellEntry =
+        BellEntry(time = minutesToTime(minute), days = days, label = label)
 }

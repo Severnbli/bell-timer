@@ -3,23 +3,22 @@ package com.belltimer.app
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.belltimer.app.data.API_SPECIAL_DAYS
+import com.belltimer.app.data.API_PACKS
 import com.belltimer.app.data.ApiClient
 import com.belltimer.app.data.ApiException
 import com.belltimer.app.data.AppSettings
 import com.belltimer.app.data.BellSchedule
 import com.belltimer.app.data.DEFAULT_RING_SECONDS
-import com.belltimer.app.data.DayOverride
 import com.belltimer.app.data.DeviceStatus
-import com.belltimer.app.data.MAX_DATE_OVERRIDES
+import com.belltimer.app.data.MAX_PACK_DATES
+import com.belltimer.app.data.MAX_PACK_ENTRIES
+import com.belltimer.app.data.MAX_PACKS
 import com.belltimer.app.data.MAX_RING_SECONDS
 import com.belltimer.app.data.MAX_SCHEDULE_ENTRIES
-import com.belltimer.app.data.MAX_SCHEDULE_GROUPS
 import com.belltimer.app.data.MIN_RING_SECONDS
 import com.belltimer.app.data.ScheduleCodec
 import com.belltimer.app.data.ScheduleIssue
 import com.belltimer.app.data.SettingsStore
-import com.belltimer.app.data.canAddOverride
 import com.belltimer.app.data.normalizeBaseUrl
 import com.belltimer.app.data.toDomain
 import com.belltimer.app.data.toDto
@@ -33,7 +32,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
@@ -58,7 +56,7 @@ data class UiState(
     /** API level reported by the device; 2 until the first status response. */
     val apiVersion: Int = 2,
 ) {
-    val supportsSpecialDays: Boolean get() = apiVersion >= API_SPECIAL_DAYS
+    val supportsPacks: Boolean get() = apiVersion >= API_PACKS
 }
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
@@ -336,30 +334,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Creates one override per date, skipping dates that already have one. */
-    fun addOverrides(template: DayOverride, dates: List<LocalDate>) {
-        var current = _state.value.schedule
-        var added = 0
-        var limited = false
-        for (date in dates) {
-            if (current.overrideFor(date) != null) continue
-            if (!current.canAddOverride()) {
-                limited = true
-                continue
-            }
-            current = current.withOverride(template.copy(date = date))
-            added++
-        }
-        if (added > 0) updateSchedule(current, undoable = true)
-        val context = getApplication<Application>()
-        val message = if (added == 0 && limited) {
-            context.getString(R.string.day_repeat_limit, MAX_DATE_OVERRIDES)
-        } else {
-            context.getString(R.string.day_repeat_created, added)
-        }
-        _state.update { it.copy(message = message) }
-    }
-
     /** Validates and sends the whole schedule, then verifies the device copy. */
     fun sendSchedule() {
         if (_state.value.busy) return
@@ -470,9 +444,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun withinDeviceLimits(schedule: BellSchedule): Boolean =
-        schedule.groups.size <= MAX_SCHEDULE_GROUPS &&
+        schedule.packs.size <= MAX_PACKS &&
             schedule.totalEntries <= MAX_SCHEDULE_ENTRIES &&
-            schedule.overrides.size <= MAX_DATE_OVERRIDES
+            schedule.packs.all { it.entries.size <= MAX_PACK_ENTRIES } &&
+            schedule.packs.all { it.window.dates.size <= MAX_PACK_DATES }
 
     fun saveSettings(baseUrl: String, token: String, ringDefault: Int) {
         val normalizedUrl = normalizeBaseUrl(baseUrl)
@@ -559,11 +534,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val context = getApplication<Application>()
         return when (issue) {
             is ScheduleIssue.AutoWindowInvalid -> context.getString(R.string.schedule_auto_invalid)
-            is ScheduleIssue.ScheduleWithoutDays -> context.getString(R.string.schedule_without_days)
-            is ScheduleIssue.OverlappingWeekdays -> context.getString(R.string.schedule_overlap_error)
-            is ScheduleIssue.TooManyEntries -> context.getString(R.string.error_too_many_entries)
-            is ScheduleIssue.TooManyGroups -> context.getString(R.string.error_too_many_groups)
-            is ScheduleIssue.TooManyOverrides -> context.getString(R.string.error_too_many_overrides)
+            is ScheduleIssue.PackWindowInvalid -> context.getString(R.string.schedule_validity_invalid)
+            is ScheduleIssue.TooManyPacks -> context.getString(R.string.error_too_many_packs)
+            is ScheduleIssue.TooManyPackEntries -> context.getString(R.string.error_too_many_pack_entries)
+            is ScheduleIssue.TooManyPackDates -> context.getString(R.string.error_too_many_pack_dates)
             is ScheduleIssue.FirmwareTooOld -> context.getString(R.string.schedule_needs_new_firmware)
         }
     }
@@ -602,6 +576,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 "invalid_schedule" -> context.getString(R.string.error_invalid_schedule)
                 "invalid_request" -> context.getString(R.string.error_invalid_request)
                 "too_many_entries" -> context.getString(R.string.error_too_many_entries)
+                "too_many_packs" -> context.getString(R.string.error_too_many_packs)
+                "too_many_pack_entries" -> context.getString(R.string.error_too_many_pack_entries)
+                "too_many_pack_dates" -> context.getString(R.string.error_too_many_pack_dates)
                 "too_many_groups" -> context.getString(R.string.error_too_many_groups)
                 "too_many_overrides" -> context.getString(R.string.error_too_many_overrides)
                 "too_many_exceptions" -> context.getString(R.string.error_too_many_exceptions)

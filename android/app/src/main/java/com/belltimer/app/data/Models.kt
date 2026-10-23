@@ -13,10 +13,12 @@ const val DEFAULT_BASE_URL = "http://192.168.4.1"
 const val DEFAULT_RING_SECONDS = 5
 
 /** Firmware limits, mirrored in firmware/BellTimer/BellTimer.ino. */
-const val MAX_SCHEDULE_ENTRIES = 256
-const val MAX_SCHEDULE_GROUPS = 12
-const val MAX_DATE_OVERRIDES = 90
+const val MAX_PACKS = 12
+const val MAX_PACK_ENTRIES = 16
+const val MAX_PACK_DATES = 24
+const val MAX_SCHEDULE_ENTRIES = MAX_PACKS * MAX_PACK_ENTRIES
 const val MAX_LABEL_BYTES = 32
+const val MAX_PACK_NAME_BYTES = 32
 
 /** Firmware accepts 1..60 seconds for a single bell. */
 const val MIN_RING_SECONDS = 1
@@ -26,10 +28,10 @@ const val MAX_RING_SECONDS = 60
 const val SLIDER_MAX_SECONDS = 10
 
 /** Schedule document version written by this app. */
-const val SCHEDULE_VERSION = 3
+const val SCHEDULE_VERSION = 4
 
-/** Device API level that understands schedule version 3 (special days). */
-const val API_SPECIAL_DAYS = 3
+/** Device API level that understands schedule version 4 (packs). */
+const val API_PACKS = 4
 
 data class AppSettings(
     val baseUrl: String = DEFAULT_BASE_URL,
@@ -50,33 +52,26 @@ data class DeviceStatus(
     val api: Int = 2,
 ) {
     val isAuto: Boolean get() = mode == "auto"
-    val supportsSpecialDays: Boolean get() = api >= API_SPECIAL_DAYS
+    val supportsPacks: Boolean get() = api >= API_PACKS
 }
 
 data class BellEntry(
     val time: String,
-    val days: Set<Int>,
-    val duration: Int,
-    val label: String,
+    val pair: String? = null,
+    val days: Set<Int> = ALL_DAYS,
+    val label: String = "",
 ) {
-    val minutes: Int
-        get() {
-            val parts = time.split(':')
-            if (parts.size != 2) return INVALID_MINUTE
-            val hour = parts[0].toIntOrNull() ?: return INVALID_MINUTE
-            val minute = parts[1].toIntOrNull() ?: return INVALID_MINUTE
-            if (hour !in 0..23 || minute !in 0..59) return INVALID_MINUTE
-            return hour * 60 + minute
-        }
+    val minutes: Int get() = parseTimeToMinutes(time) ?: INVALID_MINUTE
 
-    val isValid: Boolean get() = minutes != INVALID_MINUTE
+    val pairMinutes: Int? get() = pair?.let { parseTimeToMinutes(it) }
 
-    fun toDto(days: List<Int>?): ScheduleEntryDto = ScheduleEntryDto(
-        time = time,
-        days = days,
-        duration = duration,
-        label = label,
-    )
+    val isValid: Boolean get() = minutes != INVALID_MINUTE && (pair == null || pairMinutes != null)
+
+    /** A paired bell expands into one more bell with the same days and label. */
+    fun resolved(): List<BellEntry> {
+        val second = pair ?: return listOf(this)
+        return listOf(copy(pair = null), copy(time = second, pair = null))
+    }
 
     companion object {
         const val INVALID_MINUTE = Int.MAX_VALUE
@@ -87,77 +82,152 @@ fun List<BellEntry>.sortedSchedule(): List<BellEntry> =
     sortedWith(compareBy<BellEntry>({ it.minutes }, { it.label }))
 
 /**
- * Collapses bells that fall on the same minute into one: the longer duration
- * wins and the earliest label is kept. The firmware applies the same rule when
- * a schedule bell and an extra bell land on the same HH:MM.
+ * Collapses bells that share a minute. The first bell wins; a later bell only
+ * contributes a label when the first one has none. The firmware applies the
+ * same rule.
  */
 fun List<BellEntry>.mergeSameMinute(): List<BellEntry> {
     val merged = LinkedHashMap<Int, BellEntry>()
     for (entry in this) {
-        val key = entry.minutes
-        val existing = merged[key]
-        merged[key] = when {
+        val existing = merged[entry.minutes]
+        merged[entry.minutes] = when {
             existing == null -> entry
-            entry.duration > existing.duration ->
-                entry.copy(label = existing.label.ifBlank { entry.label })
+            existing.label.isBlank() && entry.label.isNotBlank() -> entry
             else -> existing
         }
     }
     return merged.values.toList()
 }
 
+val ALL_DAYS: Set<Int> = (1..7).toSet()
+val WEEKDAYS: Set<Int> = setOf(1, 2, 3, 4, 5)
+
+enum class PackKind {
+    Base,
+    Correction;
+
+    val wireName: String get() = if (this == Base) "base" else "correction"
+
+    companion object {
+        fun fromWire(value: String?): PackKind =
+            if (value.equals("correction", ignoreCase = true)) Correction else Base
+    }
+}
+
 /**
- * A named set of bells that repeats on the selected weekdays. Each weekday
- * belongs to at most one schedule; the device still uses the first match.
+ * When a pack is allowed to run. [from] and [to] form a date range, [dates]
+ * lists individual dates, and [yearly] compares month and day instead of the
+ * full date (so a range may wrap over New Year).
  */
-data class ScheduleGroup(
+data class PackWindow(
+    val from: LocalDate? = null,
+    val to: LocalDate? = null,
+    val dates: Set<LocalDate> = emptySet(),
+    val yearly: Boolean = false,
+) {
+    val hasRange: Boolean get() = from != null || to != null
+
+    val isSet: Boolean get() = hasRange || dates.isNotEmpty()
+
+    val isValid: Boolean
+        get() = yearly || from == null || to == null || !to.isBefore(from)
+
+    fun allows(date: LocalDate): Boolean {
+        if (!isSet) return true
+        if (hasRange && inRange(date)) return true
+        return dates.any { matches(it, date) }
+    }
+
+    private fun inRange(date: LocalDate): Boolean {
+        if (!yearly) {
+            if (from != null && date.isBefore(from)) return false
+            if (to != null && date.isAfter(to)) return false
+            return true
+        }
+        val value = monthDay(date)
+        val start = from?.let(::monthDay)
+        val end = to?.let(::monthDay)
+        return when {
+            start != null && end != null && start > end -> value >= start || value <= end
+            start != null && end != null -> value in start..end
+            start != null -> value >= start
+            end != null -> value <= end
+            else -> false
+        }
+    }
+
+    private fun matches(expected: LocalDate, date: LocalDate): Boolean =
+        if (yearly) monthDay(expected) == monthDay(date) else expected == date
+
+    private fun monthDay(date: LocalDate): Int = date.monthValue * 100 + date.dayOfMonth
+}
+
+/**
+ * One pack ("пачка") of ranked bell entries. Base packs add bells; a
+ * correction cancels the bells of every base pack above it and adds its own.
+ */
+data class SchedulePack(
     val id: Int,
     val name: String = "",
-    val days: Set<Int> = ALL_DAYS,
+    val kind: PackKind = PackKind.Base,
+    val enabled: Boolean = true,
+    val window: PackWindow = PackWindow(),
     val entries: List<BellEntry> = emptyList(),
+    /** Legacy migration only: a correction that just cancels the packs above it. */
+    val mute: Boolean = false,
 ) {
-    /** Bells inherit the weekdays of their schedule. */
-    fun withDays(newDays: Set<Int>): ScheduleGroup =
-        copy(days = newDays, entries = entries.map { it.copy(days = newDays) })
+    fun entriesFor(date: LocalDate): List<BellEntry> {
+        val weekday = date.dayOfWeek.value
+        return entries.filter { weekday in it.days }.flatMap { it.resolved() }
+    }
 
-    fun withEntries(newEntries: List<BellEntry>): ScheduleGroup =
-        copy(entries = newEntries.sortedSchedule())
+    fun hasEntriesFor(date: LocalDate): Boolean =
+        entries.any { date.dayOfWeek.value in it.days }
 
-    fun withEntry(index: Int, entry: BellEntry): ScheduleGroup {
+    /** Whether the pack takes part in today's resolution. */
+    fun appliesOn(date: LocalDate): Boolean =
+        enabled && window.allows(date) && (mute || hasEntriesFor(date))
+
+    fun withEntries(newEntries: List<BellEntry>): SchedulePack =
+        copy(
+            entries = newEntries.sortedSchedule(),
+            // A migrated mute correction becomes a normal correction as soon
+            // as it gets bells of its own.
+            mute = if (newEntries.isEmpty()) mute else false,
+        )
+
+    fun withEntry(index: Int, entry: BellEntry): SchedulePack {
         if (index !in entries.indices) return this
         val updated = entries.toMutableList()
         updated[index] = entry
         return withEntries(updated)
     }
 
-    fun withoutEntry(index: Int): ScheduleGroup {
+    fun withoutEntry(index: Int): SchedulePack {
         if (index !in entries.indices) return this
         val updated = entries.toMutableList()
         updated.removeAt(index)
         return withEntries(updated)
     }
 
+    val weekdayUnion: Set<Int> get() = entries.flatMap { it.days }.toSet()
+
     val firstMinute: Int?
-        get() = entries.minOfOrNull { it.minutes }?.takeIf { it != BellEntry.INVALID_MINUTE }
+        get() = entries.flatMap { entry ->
+            listOfNotNull(
+                entry.minutes.takeIf { it != BellEntry.INVALID_MINUTE },
+                entry.pairMinutes?.takeIf { it != BellEntry.INVALID_MINUTE },
+            )
+        }.minOrNull()
 
     val lastMinute: Int?
-        get() = entries.maxOfOrNull { it.minutes }?.takeIf { it != BellEntry.INVALID_MINUTE }
+        get() = entries.flatMap { entry ->
+            listOfNotNull(
+                entry.minutes.takeIf { it != BellEntry.INVALID_MINUTE },
+                entry.pairMinutes?.takeIf { it != BellEntry.INVALID_MINUTE },
+            )
+        }.maxOrNull()
 }
-
-val ALL_DAYS: Set<Int> = (1..7).toSet()
-val WEEKDAYS: Set<Int> = setOf(1, 2, 3, 4, 5)
-
-enum class DayOverrideMode { Mute, Replace, Add }
-
-/** A bell list for one specific calendar date. */
-data class DayOverride(
-    val date: LocalDate,
-    val mode: DayOverrideMode,
-    /** Mute: empty. Replace: the full bell list. Add: extra bells on top of the schedule. */
-    val entries: List<BellEntry> = emptyList(),
-    /** UI only: the schedule this override was created from. The firmware ignores it. */
-    val basedOnGroupId: Int? = null,
-)
 
 /** Optional date range in which auto mode is allowed to ring. */
 data class AutoWindow(
@@ -174,79 +244,77 @@ data class AutoWindow(
             (stop == null || !date.isAfter(stop))
 }
 
-data class WeekdayConflict(val day: Int, val group: ScheduleGroup)
-
 data class UpcomingBell(val at: LocalDateTime, val entry: BellEntry)
 
 data class BellSchedule(
-    val groups: List<ScheduleGroup> = emptyList(),
-    val overrides: List<DayOverride> = emptyList(),
+    val packs: List<SchedulePack> = emptyList(),
     val auto: AutoWindow = AutoWindow(),
 ) {
-    val totalEntries: Int
-        get() = groups.sumOf { it.entries.size } + overrides.sumOf { it.entries.size }
+    val totalEntries: Int get() = packs.sumOf { it.entries.size }
 
-    val isEmpty: Boolean get() = groups.isEmpty() && overrides.isEmpty()
+    val isEmpty: Boolean get() = packs.isEmpty()
 
-    fun groupById(id: Int?): ScheduleGroup? =
-        if (id == null) null else groups.firstOrNull { it.id == id }
+    fun packById(id: Int?): SchedulePack? =
+        if (id == null) null else packs.firstOrNull { it.id == id }
 
-    fun nextGroupId(): Int {
-        val used = groups.map { it.id }.toSet()
-        return (1..MAX_SCHEDULE_GROUPS).firstOrNull { it !in used }
-            ?: (groups.maxOfOrNull { it.id } ?: 0) + 1
+    fun nextPackId(): Int {
+        val used = packs.map { it.id }.toSet()
+        return (1..MAX_PACKS).firstOrNull { it !in used }
+            ?: (packs.maxOfOrNull { it.id } ?: 0) + 1
     }
 
-    fun overrideFor(date: LocalDate): DayOverride? = overrides.firstOrNull { it.date == date }
-
-    /** The schedule that normally rings on [date], ignoring overrides. */
-    fun baseGroupFor(date: LocalDate): ScheduleGroup? =
-        groups.firstOrNull { date.dayOfWeek.value in it.days }
-
-    fun withGroup(group: ScheduleGroup): BellSchedule {
-        val exists = groups.any { it.id == group.id }
+    fun withPack(pack: SchedulePack): BellSchedule {
+        val exists = packs.any { it.id == pack.id }
         val updated = if (exists) {
-            groups.map { if (it.id == group.id) group else it }
+            packs.map { if (it.id == pack.id) pack else it }
         } else {
-            groups + group
+            packs + pack
         }
-        return copy(groups = updated)
+        return copy(packs = updated)
     }
 
-    fun withoutGroup(id: Int): BellSchedule = copy(groups = groups.filterNot { it.id == id })
+    fun withoutPack(id: Int): BellSchedule = copy(packs = packs.filterNot { it.id == id })
 
-    fun withOverride(override: DayOverride): BellSchedule = copy(
-        overrides = (overrides.filterNot { it.date == override.date } + override)
-            .sortedBy { it.date },
-    )
-
-    fun withoutOverride(date: LocalDate): BellSchedule =
-        copy(overrides = overrides.filterNot { it.date == date })
-
-    /** Weekdays in [days] that another schedule already owns. */
-    fun conflictingDays(days: Set<Int>, excludeGroupId: Int? = null): List<WeekdayConflict> =
-        days.sorted().mapNotNull { day ->
-            groups.firstOrNull { it.id != excludeGroupId && day in it.days }
-                ?.let { WeekdayConflict(day, it) }
-        }
+    /** Moves a pack by [delta] positions; the order is meaningful for corrections. */
+    fun movePack(id: Int, delta: Int): BellSchedule {
+        val index = packs.indexOfFirst { it.id == id }
+        if (index < 0 || delta == 0) return this
+        val target = (index + delta).coerceIn(packs.indices)
+        if (target == index) return this
+        val updated = packs.toMutableList()
+        val pack = updated.removeAt(index)
+        updated.add(target, pack)
+        return copy(packs = updated)
+    }
 
     /**
      * The single source of truth for what rings on a date. The firmware applies
-     * exactly the same rules (see docs/firmware-api-v3.md).
+     * exactly the same rules (see docs/firmware-api-v4.md).
+     *
+     * Packs are evaluated top to bottom. A base pack contributes its bells; a
+     * correction that has bells for this weekday first cancels every base bell
+     * collected above it and then contributes its own.
      */
     fun bellsFor(date: LocalDate): List<BellEntry> {
         if (!auto.allows(date)) return emptyList()
-        val weekday = date.dayOfWeek.value
-        val base = baseGroupFor(date)
-            ?.entries
-            ?.filter { it.days.isEmpty() || weekday in it.days }
-            .orEmpty()
-        val override = overrideFor(date) ?: return base.sortedSchedule()
-        return when (override.mode) {
-            DayOverrideMode.Mute -> emptyList()
-            DayOverrideMode.Replace -> override.entries.mergeSameMinute().sortedSchedule()
-            DayOverrideMode.Add -> (base + override.entries).mergeSameMinute().sortedSchedule()
+        val base = mutableListOf<BellEntry>()
+        val corrections = mutableListOf<BellEntry>()
+        for (pack in packs) {
+            if (!pack.enabled || !pack.window.allows(date)) continue
+            val today = pack.entriesFor(date)
+            when (pack.kind) {
+                PackKind.Base -> base += today
+                PackKind.Correction -> {
+                    if (pack.mute) {
+                        base.clear()
+                    } else if (today.isNotEmpty()) {
+                        base.clear()
+                        corrections += today
+                    }
+                }
+            }
         }
+        return (base + corrections).mergeSameMinute().sortedSchedule()
     }
 
     /** The next bell strictly after [after], scanning ahead [horizonDays] days. */
@@ -268,9 +336,9 @@ data class BellSchedule(
  * Serializes schedules for the import/export files. The format is the same
  * JSON document the firmware accepts for POST /schedule.
  *
- * Encoding always writes version 3. Decoding accepts version 1 (a flat
- * "entries" array), version 2 ("exceptions" with mute/group_id) and version 3
- * ("overrides" with mute/replace/add).
+ * Encoding always writes version 4 ("packs"). Decoding accepts version 1 (a
+ * flat "entries" array), version 2 ("exceptions"), version 3 ("groups" plus
+ * "overrides") and version 4.
  */
 object ScheduleCodec {
 
@@ -320,14 +388,33 @@ data class StatusDto(
 
 @Serializable
 data class ScheduleDto(
-    val version: Int = 2,
-    val groups: List<ScheduleGroupDto> = emptyList(),
-    /** Legacy v1 flat list, and a read-only view the firmware still returns. */
+    val version: Int = SCHEDULE_VERSION,
+    /** Version 4 pack list. When null, the legacy fields below are migrated. */
+    val packs: List<SchedulePackDto>? = null,
+    val auto: AutoWindowDto? = null,
+    /** Legacy v3 groups, read-only on decode. */
+    val groups: List<ScheduleGroupDto>? = null,
+    /** Legacy v1 flat list, read-only on decode. */
     val entries: List<ScheduleEntryDto>? = null,
-    val overrides: List<DayOverrideDto> = emptyList(),
+    /** Legacy v3 overrides, read-only on decode. */
+    val overrides: List<DayOverrideDto>? = null,
     /** Legacy v2 exceptions, read-only on decode. */
     val exceptions: List<DateExceptionDto>? = null,
-    val auto: AutoWindowDto? = null,
+)
+
+@Serializable
+data class SchedulePackDto(
+    val id: Int = 0,
+    val name: String = "",
+    val kind: String = "base",
+    val enabled: Boolean = true,
+    val from: String? = null,
+    val to: String? = null,
+    val dates: List<String> = emptyList(),
+    val yearly: Boolean = false,
+    /** Legacy migration only; not written for normal packs. */
+    val mute: Boolean = false,
+    val entries: List<ScheduleEntryDto> = emptyList(),
 )
 
 @Serializable
@@ -362,8 +449,10 @@ data class AutoWindowDto(
 @Serializable
 data class ScheduleEntryDto(
     val time: String,
+    val pair: String? = null,
     val days: List<Int>? = null,
-    val duration: Int = DEFAULT_RING_SECONDS,
+    /** Read-only legacy field: the ring duration now lives in the settings. */
+    val duration: Int? = null,
     val label: String = "",
 )
 
@@ -408,124 +497,163 @@ fun StatusDto.toDomain(): DeviceStatus = DeviceStatus(
 )
 
 fun ScheduleDto.toDomain(): BellSchedule {
-    // A legacy document only has a flat "entries" array. It becomes a single
-    // group that is active every day; the per-entry weekdays still apply.
-    val sourceGroups = when {
-        groups.isNotEmpty() -> groups
-        !entries.isNullOrEmpty() -> legacyGroups()
-        else -> emptyList()
-    }
-    val usedIds = mutableSetOf<Int>()
-    val idMap = mutableMapOf<Int, Int>()
-    val domainGroups = sourceGroups.map { dto ->
-        val groupId = normalizeGroupId(dto.id, usedIds)
-        if (dto.id > 0 && dto.id !in idMap) idMap[dto.id] = groupId
-        val groupDays = normalizeDays(dto.days)
-        ScheduleGroup(
-            id = groupId,
-            name = dto.name.trim(),
-            days = groupDays,
-            entries = dto.entries
-                .mapNotNull { it.toDomainEntry(groupDays) }
-                .sortedSchedule(),
-        )
-    }
-
-    val modern = overrides.mapNotNull { it.toDomain() }
-    val legacy = exceptions.orEmpty().mapNotNull { it.toDomain(idMap, domainGroups) }
-    val domainOverrides = (modern + legacy)
-        .distinctBy { it.date }
-        .sortedBy { it.date }
-
+    val domainPacks = packs?.let { decodePacks(it) } ?: decodeLegacyPacks()
     return BellSchedule(
-        groups = domainGroups,
-        overrides = domainOverrides,
+        packs = domainPacks,
         auto = auto?.toDomain() ?: AutoWindow(),
     )
 }
 
+private fun decodePacks(source: List<SchedulePackDto>): List<SchedulePack> {
+    val used = mutableSetOf<Int>()
+    return source.map { dto ->
+        val kind = PackKind.fromWire(dto.kind)
+        SchedulePack(
+            id = normalizePackId(dto.id, used),
+            name = dto.name.trim(),
+            kind = kind,
+            enabled = dto.enabled,
+            window = PackWindow(
+                from = parseIsoDate(dto.from),
+                to = parseIsoDate(dto.to),
+                dates = dto.dates.mapNotNull(::parseIsoDate).toSet(),
+                yearly = dto.yearly,
+            ),
+            entries = dto.entries.mapNotNull { it.toDomainEntry(ALL_DAYS) }.sortedSchedule(),
+            mute = kind == PackKind.Correction && dto.mute,
+        )
+    }
+}
+
+/**
+ * Turns v1/v2/v3 documents into packs. Groups become base packs; "add"
+ * overrides become date-limited base packs; "mute"/"replace" overrides become
+ * corrections placed after every base pack so they cancel all of them.
+ */
+private fun ScheduleDto.decodeLegacyPacks(): List<SchedulePack> {
+    val base = mutableListOf<SchedulePack>()
+    val added = mutableListOf<SchedulePack>()
+    val corrections = mutableListOf<SchedulePack>()
+    val used = mutableSetOf<Int>()
+    var nextId = 1
+
+    fun freshId(): Int {
+        while (nextId in used) nextId++
+        used += nextId
+        return nextId
+    }
+
+    val sourceGroups = when {
+        !groups.isNullOrEmpty() -> groups.orEmpty()
+        !entries.isNullOrEmpty() -> listOf(
+            ScheduleGroupDto(
+                id = 1,
+                name = "",
+                days = ALL_DAYS.sorted(),
+                entries = entries.orEmpty(),
+            ),
+        )
+        else -> emptyList()
+    }
+    val idMap = mutableMapOf<Int, Int>()
+    for (dto in sourceGroups) {
+        val id = freshId()
+        if (dto.id > 0 && dto.id !in idMap) idMap[dto.id] = id
+        val groupDays = normalizeDays(dto.days)
+        base += SchedulePack(
+            id = id,
+            name = dto.name.trim(),
+            kind = PackKind.Base,
+            entries = dto.entries.mapNotNull { it.toDomainEntry(groupDays) }.sortedSchedule(),
+        )
+    }
+
+    for (dto in overrides.orEmpty()) {
+        val date = parseIsoDate(dto.date) ?: continue
+        val overrideEntries = dto.entries
+            .mapNotNull { it.toDomainEntry(ALL_DAYS) }
+            // Date overrides ignore weekdays in v1-v3.
+            .map { it.copy(days = ALL_DAYS) }
+            .sortedSchedule()
+        when (dto.mode.lowercase()) {
+            "mute" -> corrections += SchedulePack(
+                id = freshId(),
+                kind = PackKind.Correction,
+                window = PackWindow(dates = setOf(date)),
+                mute = true,
+            )
+            "replace" -> corrections += SchedulePack(
+                id = freshId(),
+                kind = PackKind.Correction,
+                window = PackWindow(dates = setOf(date)),
+                entries = overrideEntries,
+                // A v3 replace with an empty list means "no bells".
+                mute = overrideEntries.isEmpty(),
+            )
+            "add" -> added += SchedulePack(
+                id = freshId(),
+                kind = PackKind.Base,
+                window = PackWindow(dates = setOf(date)),
+                entries = overrideEntries,
+            )
+        }
+    }
+
+    for (dto in exceptions.orEmpty()) {
+        val date = parseIsoDate(dto.date) ?: continue
+        if (dto.mute) {
+            corrections += SchedulePack(
+                id = freshId(),
+                kind = PackKind.Correction,
+                window = PackWindow(dates = setOf(date)),
+                mute = true,
+            )
+        } else {
+            val targetId = dto.groupId?.let { idMap[it] } ?: continue
+            val group = base.firstOrNull { it.id == targetId } ?: continue
+            // A date exception ignores weekdays in v2.
+            val copied = group.entries.map { it.copy(days = ALL_DAYS) }
+            corrections += SchedulePack(
+                id = freshId(),
+                kind = PackKind.Correction,
+                window = PackWindow(dates = setOf(date)),
+                entries = copied,
+                // Copying an empty group means "no bells".
+                mute = copied.isEmpty(),
+            )
+        }
+    }
+
+    return base + added + corrections
+}
+
 fun BellSchedule.toDto(): ScheduleDto = ScheduleDto(
     version = SCHEDULE_VERSION,
-    groups = groups.map { group ->
-        ScheduleGroupDto(
-            id = group.id,
-            name = group.name,
-            days = group.days.sorted(),
-            entries = group.entries.map { it.toDto(group.days.sorted()) },
+    packs = packs.map { pack ->
+        SchedulePackDto(
+            id = pack.id,
+            name = pack.name,
+            kind = pack.kind.wireName,
+            enabled = pack.enabled,
+            from = pack.window.from?.toString(),
+            to = pack.window.to?.toString(),
+            dates = pack.window.dates.sorted().map { it.toString() },
+            yearly = pack.window.yearly,
+            mute = pack.mute,
+            entries = pack.entries.sortedSchedule().map { it.toDto() },
         )
     },
-    entries = null,
-    overrides = overrides.sortedBy { it.date }.map { override ->
-        DayOverrideDto(
-            date = override.date.toString(),
-            mode = override.mode.wireName(),
-            basedOn = override.basedOnGroupId,
-            entries = if (override.mode == DayOverrideMode.Mute) {
-                emptyList()
-            } else {
-                override.entries.sortedSchedule().map { it.toDto(days = null) }
-            },
-        )
-    },
-    exceptions = null,
     auto = if (auto.isSet) AutoWindowDto(auto.start?.toString(), auto.stop?.toString()) else null,
 )
 
-private fun DayOverrideMode.wireName(): String = when (this) {
-    DayOverrideMode.Mute -> "mute"
-    DayOverrideMode.Replace -> "replace"
-    DayOverrideMode.Add -> "add"
-}
-
-private fun ScheduleDto.legacyGroups(): List<ScheduleGroupDto> = listOf(
-    ScheduleGroupDto(
-        id = 1,
-        name = "",
-        days = ALL_DAYS.sorted(),
-        entries = entries.orEmpty(),
-    ),
+private fun BellEntry.toDto(): ScheduleEntryDto = ScheduleEntryDto(
+    time = time,
+    pair = pair,
+    days = days.sorted(),
+    label = label,
 )
 
-private fun DayOverrideDto.toDomain(): DayOverride? {
-    val parsedDate = parseIsoDate(date) ?: return null
-    val parsedMode = when (mode.lowercase()) {
-        "mute" -> DayOverrideMode.Mute
-        "replace" -> DayOverrideMode.Replace
-        "add" -> DayOverrideMode.Add
-        else -> return null
-    }
-    val parsedEntries = if (parsedMode == DayOverrideMode.Mute) {
-        emptyList()
-    } else {
-        entries.mapNotNull { it.toOverrideEntry() }.sortedSchedule()
-    }
-    return DayOverride(
-        date = parsedDate,
-        mode = parsedMode,
-        entries = parsedEntries,
-        basedOnGroupId = basedOn,
-    )
-}
-
-/** Migrates a version 2 exception: mute stays mute, group_id becomes a copy. */
-private fun DateExceptionDto.toDomain(
-    idMap: Map<Int, Int>,
-    groups: List<ScheduleGroup>,
-): DayOverride? {
-    val parsedDate = parseIsoDate(date) ?: return null
-    if (mute) return DayOverride(date = parsedDate, mode = DayOverrideMode.Mute)
-    val sourceId = groupId ?: return null
-    val targetId = idMap[sourceId] ?: return null
-    val group = groups.firstOrNull { it.id == targetId } ?: return null
-    return DayOverride(
-        date = parsedDate,
-        mode = DayOverrideMode.Replace,
-        entries = group.entries,
-        basedOnGroupId = targetId,
-    )
-}
-
-private fun normalizeGroupId(raw: Int, used: MutableSet<Int>): Int {
+private fun normalizePackId(raw: Int, used: MutableSet<Int>): Int {
     var id = if (raw > 0 && raw !in used) raw else 1
     while (id in used) id++
     used.add(id)
@@ -535,28 +663,22 @@ private fun normalizeGroupId(raw: Int, used: MutableSet<Int>): Int {
 private fun normalizeDays(raw: List<Int>): Set<Int> =
     raw.filter { it in 1..7 }.toSet().ifEmpty { ALL_DAYS }
 
-/** Parses a bell inside a schedule: missing weekdays fall back to the schedule. */
+/** Parses a bell: missing weekdays fall back to the pack's defaults. */
 private fun ScheduleEntryDto.toDomainEntry(fallbackDays: Set<Int>): BellEntry? {
     val parsedMinutes = parseTimeToMinutes(time) ?: return null
+    val parsedPair = if (pair.isNullOrBlank()) {
+        null
+    } else {
+        parseTimeToMinutes(pair) ?: return null
+    }
     val entryDays = when {
         days.isNullOrEmpty() -> fallbackDays
-        else -> normalizeDays(days)
+        else -> normalizeDays(days) intersect fallbackDays
     }
     return BellEntry(
         time = minutesToTime(parsedMinutes),
+        pair = parsedPair?.let { minutesToTime(it) },
         days = entryDays,
-        duration = duration.coerceIn(MIN_RING_SECONDS, MAX_RING_SECONDS),
-        label = label,
-    )
-}
-
-/** Parses a bell inside a date override: weekdays are irrelevant there. */
-private fun ScheduleEntryDto.toOverrideEntry(): BellEntry? {
-    val parsedMinutes = parseTimeToMinutes(time) ?: return null
-    return BellEntry(
-        time = minutesToTime(parsedMinutes),
-        days = emptySet(),
-        duration = duration.coerceIn(MIN_RING_SECONDS, MAX_RING_SECONDS),
         label = label,
     )
 }

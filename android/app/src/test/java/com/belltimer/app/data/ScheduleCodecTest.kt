@@ -9,11 +9,15 @@ import java.time.LocalDate
 
 class ScheduleCodecTest {
 
-    private fun bell(time: String, duration: Int = 5, label: String = "") =
-        BellEntry(time = time, days = emptySet(), duration = duration, label = label)
+    private fun bell(
+        time: String,
+        pair: String? = null,
+        days: Set<Int> = WEEKDAYS,
+        label: String = "",
+    ) = BellEntry(time = time, pair = pair, days = days, label = label)
 
     @Test
-    fun `decodes version 1 flat entries`() {
+    fun `decodes version 1 flat entries into one base pack`() {
         val json = """
             {"version":1,"entries":[
               {"time":"08:00","days":[1,2,3],"duration":7,"label":"Урок 1"},
@@ -22,16 +26,15 @@ class ScheduleCodecTest {
         """.trimIndent()
 
         val schedule = ScheduleCodec.decode(json)
-        assertEquals(1, schedule.groups.size)
-        val group = schedule.groups.single()
-        assertEquals(ALL_DAYS, group.days)
-        assertEquals(listOf("08:00", "09:05"), group.entries.map { it.time })
-        assertEquals(setOf(1, 2, 3), group.entries.first().days)
-        assertEquals(7, group.entries.first().duration)
+        val pack = schedule.packs.single()
+        assertEquals(PackKind.Base, pack.kind)
+        assertEquals(listOf("08:00", "09:05"), pack.entries.map { it.time })
+        assertEquals(setOf(1, 2, 3), pack.entries.first().days)
+        assertEquals(setOf(1, 2, 3), pack.weekdayUnion)
     }
 
     @Test
-    fun `decodes version 2 exceptions into overrides`() {
+    fun `decodes version 2 exceptions into corrections`() {
         val json = """
             {"version":2,
              "groups":[
@@ -47,20 +50,20 @@ class ScheduleCodecTest {
         """.trimIndent()
 
         val schedule = ScheduleCodec.decode(json)
-        assertEquals(2, schedule.overrides.size)
+        assertEquals(4, schedule.packs.size)
+        assertEquals(2, schedule.packs.count { it.kind == PackKind.Base })
 
-        val muted = schedule.overrideFor(LocalDate.of(2026, 11, 4))
-        assertEquals(DayOverrideMode.Mute, muted?.mode)
-        assertTrue(muted?.entries?.isEmpty() == true)
+        val muted = schedule.packs.first { it.mute }
+        assertEquals(setOf(LocalDate.of(2026, 11, 4)), muted.window.dates)
 
-        val replaced = schedule.overrideFor(LocalDate.of(2026, 11, 7))
-        assertEquals(DayOverrideMode.Replace, replaced?.mode)
-        assertEquals(2, replaced?.basedOnGroupId)
-        assertEquals(listOf("09:00"), replaced?.entries?.map { it.time })
+        val replaced = schedule.packs.last()
+        assertEquals(PackKind.Correction, replaced.kind)
+        assertEquals(listOf("09:00"), replaced.entries.map { it.time })
+        assertEquals(setOf(LocalDate.of(2026, 11, 7)), replaced.window.dates)
     }
 
     @Test
-    fun `decodes version 3 overrides`() {
+    fun `decodes version 3 groups and overrides`() {
         val json = """
             {"version":3,
              "groups":[{"id":1,"name":"Будни","days":[1,2,3,4,5],
@@ -76,61 +79,87 @@ class ScheduleCodecTest {
         """.trimIndent()
 
         val schedule = ScheduleCodec.decode(json)
-        assertEquals(3, schedule.overrides.size)
-        assertEquals(DayOverrideMode.Add, schedule.overrideFor(LocalDate.of(2026, 11, 13))?.mode)
-        assertEquals(DayOverrideMode.Mute, schedule.overrideFor(LocalDate.of(2026, 11, 14))?.mode)
-        assertTrue(schedule.overrideFor(LocalDate.of(2026, 11, 14))?.entries?.isEmpty() == true)
-        assertEquals(1, schedule.overrideFor(LocalDate.of(2026, 11, 16))?.basedOnGroupId)
+
+        // base group, add override as a date-limited base pack, then corrections
+        assertEquals(4, schedule.packs.size)
+        assertEquals(listOf(PackKind.Base, PackKind.Base, PackKind.Correction, PackKind.Correction),
+            schedule.packs.map { it.kind })
+
+        val added = schedule.packs[1]
+        assertEquals(setOf(LocalDate.of(2026, 11, 13)), added.window.dates)
+        assertEquals(listOf("12:30"), added.entries.map { it.time })
+
+        assertTrue(schedule.packs[2].mute)
+        assertEquals(setOf(LocalDate.of(2026, 11, 14)), schedule.packs[2].window.dates)
+        assertEquals(listOf("09:00"), schedule.packs[3].entries.map { it.time })
         assertEquals(LocalDate.of(2026, 9, 1), schedule.auto.start)
+    }
+
+    @Test
+    fun `empty replace override becomes a mute correction`() {
+        val json = """
+            {"version":3,
+             "groups":[{"id":1,"name":"Будни","days":[1,2,3,4,5],
+                        "entries":[{"time":"08:00","duration":5}]}],
+             "overrides":[{"date":"2026-11-04","mode":"replace","entries":[]}]}
+        """.trimIndent()
+
+        val schedule = ScheduleCodec.decode(json)
+        val correction = schedule.packs.last()
+        assertEquals(PackKind.Correction, correction.kind)
+        assertTrue(correction.mute)
+        assertTrue(correction.entries.isEmpty())
+        assertTrue(schedule.bellsFor(LocalDate.of(2026, 11, 4)).isEmpty())
     }
 
     @Test
     fun `ignores unknown keys`() {
         val json = """
-            {"version":3,"future_field":true,
-             "groups":[{"id":1,"days":[1],"entries":[{"time":"08:00","duration":5,"extra":1}]}]}
+            {"version":4,"future_field":true,
+             "packs":[{"id":1,"kind":"base","entries":[{"time":"08:00","extra":1}]}]}
         """.trimIndent()
         val schedule = ScheduleCodec.decode(json)
-        assertEquals(listOf("08:00"), schedule.groups.single().entries.map { it.time })
+        assertEquals(listOf("08:00"), schedule.packs.single().entries.map { it.time })
     }
 
     @Test
-    fun `encodes version 3 and round-trips`() {
+    fun `encodes version 4 and round-trips`() {
         val schedule = BellSchedule(
-            groups = listOf(
-                ScheduleGroup(
+            packs = listOf(
+                SchedulePack(
                     id = 1,
                     name = "Будни",
-                    days = WEEKDAYS,
+                    kind = PackKind.Base,
+                    window = PackWindow(
+                        from = LocalDate.of(2026, 9, 1),
+                        to = LocalDate.of(2027, 5, 31),
+                        dates = setOf(LocalDate.of(2026, 11, 7)),
+                        yearly = true,
+                    ),
                     entries = listOf(
-                        bell("08:00", 5, "Урок 1 — начало").copy(days = WEEKDAYS),
-                        bell("08:45", 7, "Урок 1 — конец").copy(days = WEEKDAYS),
+                        bell("08:00", pair = "08:45", days = WEEKDAYS, label = "Урок 1"),
                     ),
                 ),
+                SchedulePack(
+                    id = 2,
+                    name = "Коррекция",
+                    kind = PackKind.Correction,
+                    enabled = false,
+                    window = PackWindow(dates = setOf(LocalDate.of(2026, 11, 4))),
+                    entries = listOf(bell("10:00", days = ALL_DAYS)),
+                ),
             ),
-            overrides = listOf(
-                DayOverride(LocalDate.of(2026, 11, 4), DayOverrideMode.Mute),
-                DayOverride(
-                    date = LocalDate.of(2026, 11, 13),
-                    mode = DayOverrideMode.Add,
-                    entries = listOf(bell("12:30", 10, "Доп. звонок")),
-                ),
-                DayOverride(
-                    date = LocalDate.of(2026, 11, 7),
-                    mode = DayOverrideMode.Replace,
-                    entries = listOf(bell("09:00", 5, "Урок 1 — начало")),
-                    basedOnGroupId = 1,
-                ),
-            ).sortedBy { it.date },
             auto = AutoWindow(LocalDate.of(2026, 9, 1), LocalDate.of(2027, 5, 31)),
         )
 
         val text = ScheduleCodec.encode(schedule)
-        assertTrue(text.contains("\"version\": 3"))
-        assertTrue(text.contains("\"mode\": \"mute\""))
-        assertTrue(text.contains("\"mode\": \"add\""))
-        assertTrue(text.contains("\"based_on\": 1"))
-        assertFalse(text.contains("\"exceptions\""))
+        assertTrue(text.contains("\"version\": 4"))
+        assertTrue(text.contains("\"kind\": \"correction\""))
+        assertTrue(text.contains("\"pair\": \"08:45\""))
+        assertTrue(text.contains("\"enabled\": false"))
+        assertFalse(text.contains("\"groups\""))
+        assertFalse(text.contains("\"overrides\""))
+        assertFalse(text.contains("\"duration\""))
 
         val decoded = ScheduleCodec.decode(text)
         assertEquals(schedule, decoded)
