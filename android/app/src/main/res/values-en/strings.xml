@@ -1,0 +1,388 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Navigation -->
+    <string name="tab_now">Now</string>
+    <string name="tab_schedule">Schedule</string>
+    <string name="tab_settings">Settings</string>
+
+    <!-- Common -->
+    <string name="ok">OK</string>
+    <string name="cancel">Cancel</string>
+    <string name="save">Save</string>
+    <string name="add">Add</string>
+    <string name="delete">Delete</string>
+    <string name="clear">Clear</string>
+    <string name="change">Change</string>
+    <string name="undo">Undo</string>
+    <string name="open">Open</string>
+    <string name="back">Back</string>
+    <string name="more">More</string>
+    <string name="increase">More</string>
+    <string name="decrease">Less</string>
+    <string name="unknown">unknown</string>
+    <string name="label_too_long">Too long for the device (up to 32 bytes)</string>
+    <string name="seconds_value">%1$d s</string>
+    <string name="days_weekdays">Weekdays</string>
+    <string name="days_weekend">Weekend</string>
+    <string name="days_every_day">Every day</string>
+    <string name="days_none">No days selected</string>
+    <string name="duration_min">%1$d min</string>
+    <string name="duration_h">%1$d h</string>
+    <string name="duration_h_min">%1$d h %2$d min</string>
+    <string name="until_now">now</string>
+    <string name="until_in">in %1$s</string>
+    <string name="until_days">in %1$d d</string>
+
+    <plurals name="bells_count">
+        <item quantity="one">%1$d bell</item>
+        <item quantity="other">%1$d bells</item>
+    </plurals>
+    <plurals name="modules_count">
+        <item quantity="one">%1$d module</item>
+        <item quantity="other">%1$d modules</item>
+    </plurals>
+    <plurals name="dates_count">
+        <item quantity="one">%1$d single date</item>
+        <item quantity="other">%1$d single dates</item>
+    </plurals>
+    <plurals name="lessons_count">
+        <item quantity="one">%1$d lesson</item>
+        <item quantity="other">%1$d lessons</item>
+    </plurals>
+
+    <!-- Connection -->
+    <string name="connection_online">Connected</string>
+    <string name="connection_connecting">Connecting</string>
+    <string name="connection_offline">Offline</string>
+    <string name="offline_hint">No connection to the device. Join the BellTimer Wi-Fi network.</string>
+    <string name="wifi_settings">Wi-Fi</string>
+
+    <!-- Now: clock -->
+    <string name="clock_title">Device time</string>
+    <string name="clock_unknown">Device time unknown</string>
+    <string name="clock_not_set">The device time is not set</string>
+    <string name="clock_in_sync">Matches the phone time</string>
+    <string name="clock_ahead">%1$s fast</string>
+    <string name="clock_behind">%1$s slow</string>
+    <string name="clock_last_sync">Synced %1$s</string>
+    <string name="sync_button">Sync with phone</string>
+    <string name="sync_running">Syncing…</string>
+    <string name="sync_done">Time synced with the phone</string>
+    <string name="sync_done_fixed">Time synced, it was off by %1$s</string>
+    <string name="drift_seconds">%1$d s</string>
+    <string name="drift_minutes">%1$d min %2$d s</string>
+    <string name="drift_hours">%1$d h %2$d min</string>
+
+    <!-- Now: bell -->
+    <string name="next_title">Next bell</string>
+    <string name="next_none">No upcoming bells</string>
+    <string name="next_manual_mode">Manual mode: the schedule does not ring</string>
+    <string name="lesson_running">In progress</string>
+    <string name="lesson_left">%1$s left</string>
+    <string name="ring_button">Ring</string>
+    <string name="ring_left">Stop · %1$d s</string>
+    <string name="ring_hint">Rings for %1$d s · duration in settings</string>
+    <string name="ring_tap_to_stop">Tap to stop</string>
+
+    <!-- Now: mode -->
+    <string name="mode_title">Mode</string>
+    <string name="mode_auto">Auto</string>
+    <string name="mode_manual">Manual</string>
+    <string name="mode_auto_hint">The device rings on schedule.</string>
+    <string name="mode_manual_hint">The schedule is off; the bell rings only on demand.</string>
+    <string name="mode_auto_set">Automatic mode on</string>
+    <string name="mode_manual_set">Manual mode on</string>
+
+    <!-- Now: today -->
+    <string name="today_title">Today</string>
+    <string name="today_empty">No bells today</string>
+    <string name="today_more">More: %1$d · open the schedule</string>
+    <string name="today_next">next</string>
+    <string name="today_unsent">Including unsent changes</string>
+
+    <!-- Schedule -->
+    <string name="schedule_reload">Load from device</string>
+    <string name="schedule_import">Import from file</string>
+    <string name="schedule_export">Export to file</string>
+    <string name="schedule_loaded">Schedule loaded from the device</string>
+    <string name="schedule_sent">Sent. Modules on the device: %1$d</string>
+    <string name="schedule_sent_mismatch">Modules on the device: %1$d, which differs from what was sent</string>
+    <string name="schedule_import_success">Modules imported: %1$d. Remember to send them.</string>
+    <string name="schedule_import_error">Could not read the schedule file</string>
+    <string name="schedule_export_success">Schedule saved to a file</string>
+    <string name="schedule_export_error">Could not save the file</string>
+    <string name="schedule_export_empty">The schedule is empty, nothing to export</string>
+    <string name="schedule_too_large">The file holds more than the device can store</string>
+
+    <string name="week_today">Today</string>
+    <string name="month_prev">Previous month</string>
+    <string name="month_next">Next month</string>
+    <string name="legend_base">main</string>
+    <string name="legend_correction">correction</string>
+    <string name="legend_muted">day off</string>
+
+    <string name="day_outside_auto">Outside the working period</string>
+    <string name="day_muted">Day off, no bells</string>
+    <string name="day_empty">No bells on this day</string>
+    <string name="day_add_correction">Correction</string>
+    <string name="day_add_holiday">Day off</string>
+    <string name="calendar_hint">Tap a day to see its bells</string>
+    <string name="agenda_pre">warning %1$s</string>
+
+    <string name="auto_window_title">Working period</string>
+    <string name="auto_window_hint">Outside these dates the schedule does not ring. Manual ringing always works.</string>
+    <string name="auto_window_range">Works from %1$s to %2$s</string>
+    <string name="auto_window_from">Works from %1$s</string>
+    <string name="auto_window_to">Works until %1$s</string>
+    <string name="date_from">From</string>
+    <string name="date_to">To</string>
+    <string name="date_not_set">not set</string>
+
+    <string name="unsent_title">Changes not sent</string>
+    <string name="unsent_discard">Discard</string>
+    <string name="unsent_send">Send</string>
+
+    <!-- Packs -->
+    <string name="packs_title">Packs</string>
+    <string name="packs_count">%1$d of %2$d</string>
+    <string name="packs_empty_title">No schedule yet</string>
+    <string name="packs_empty_text">Create a pack and add lessons or bells to it.</string>
+    <string name="packs_not_loaded">The schedule has not been loaded from the device yet. You can start a new one.</string>
+    <string name="packs_empty_action">Create schedule</string>
+    <string name="pack_default_name">Weekdays</string>
+    <string name="pack_add">Add pack</string>
+    <string name="pack_untitled">Untitled</string>
+    <string name="pack_new_title">New pack</string>
+    <string name="pack_new_base_name">New schedule</string>
+    <string name="pack_new_correction_name">Changes %1$s</string>
+    <string name="pack_new_holiday_name">Day off %1$s</string>
+    <string name="pack_new_correction_hint">Different bells on %1$s instead of the usual ones</string>
+    <string name="pack_new_holiday_hint">Cancel all bells on %1$s</string>
+    <string name="pack_kind_base">Main</string>
+    <string name="pack_kind_correction">Correction</string>
+    <string name="pack_kind_holiday">Day off</string>
+    <string name="pack_kind_base_hint">Main schedule: adds its bells to the day.</string>
+    <string name="pack_kind_correction_hint">On its days it cancels the bells of every Main pack above it and rings its own modules.</string>
+    <string name="pack_name">Name</string>
+    <string name="pack_mute">Day off</string>
+    <string name="pack_mute_hint">Only cancel bells, no modules of its own</string>
+    <string name="pack_holiday_hint">On the dates of this pack the bells of the Main packs above it are cancelled. Set the dates under “Active when”.</string>
+    <string name="pack_enabled">Enabled</string>
+    <string name="pack_enabled_on">Part of the schedule</string>
+    <string name="pack_enabled_off">Disabled, does not ring</string>
+    <string name="pack_open">Edit</string>
+    <string name="pack_enable">Enable</string>
+    <string name="pack_disable">Disable</string>
+    <string name="pack_drag">Drag</string>
+    <string name="packs_drag_hint">Tap a pack for actions. The order matters for corrections: hold a card and drag it.</string>
+    <string name="pack_move_up">Move up</string>
+    <string name="pack_move_down">Move down</string>
+    <string name="pack_duplicate">Duplicate</string>
+    <string name="pack_copy_suffix">(copy)</string>
+    <string name="pack_shift">Shift all</string>
+    <string name="pack_clear">Clear</string>
+    <string name="pack_clear_title">Clear the pack?</string>
+    <string name="pack_clear_text">All modules of this pack will be deleted.</string>
+    <string name="pack_cleared">Modules deleted</string>
+    <string name="pack_delete">Delete pack</string>
+    <string name="pack_delete_title">Delete the pack?</string>
+    <string name="pack_delete_text">“%1$s” and all its modules will be deleted.</string>
+    <string name="pack_deleted">Pack deleted</string>
+
+    <string name="window_title">Active when</string>
+    <string name="window_hint">The pack works within a date range or on single dates. Without limits it is always active.</string>
+    <string name="window_always">Always</string>
+    <string name="window_from">from %1$s</string>
+    <string name="window_to">until %1$s</string>
+    <string name="window_yearly">Every year</string>
+    <string name="window_yearly_hint">Compare only day and month</string>
+    <string name="window_yearly_short">yearly</string>
+    <string name="window_dates">Single dates</string>
+    <string name="window_add_date">Add date</string>
+
+    <string name="shift_title">Shift all modules</string>
+    <string name="shift_hint">Every bell of the pack moves by the given number of minutes.</string>
+    <string name="shift_minutes">Minutes</string>
+    <string name="shift_apply">Shift</string>
+    <string name="shift_overflow">The bells would leave the day</string>
+
+    <!-- Modules -->
+    <string name="modules_title">Modules</string>
+    <string name="modules_count">%1$d of %2$d</string>
+    <string name="modules_empty_title">No modules yet</string>
+    <string name="modules_empty_text">Build a whole lesson grid or add modules one by one.</string>
+    <string name="module_add">Module</string>
+    <string name="module_add_title">What to add?</string>
+    <string name="module_deleted">Module deleted</string>
+    <string name="module_lesson">Lesson</string>
+    <string name="module_bell">Bell</string>
+    <string name="module_series">Series</string>
+    <string name="module_lesson_hint">Two bells, at the start and at the end, optionally with a warning bell</string>
+    <string name="module_bell_hint">One bell at a set time</string>
+    <string name="module_series_hint">A bell every N minutes within an interval</string>
+    <string name="module_new_title">New module</string>
+    <string name="module_edit_title">Module</string>
+    <string name="module_time">Time</string>
+    <string name="module_start">Start</string>
+    <string name="module_end">End</string>
+    <string name="module_length">Length</string>
+    <string name="module_from">From</string>
+    <string name="module_until">Until</string>
+    <string name="module_every">Interval</string>
+    <string name="module_every_short">every %1$s</string>
+    <string name="module_pre">Warning bell</string>
+    <string name="module_pre_hint">One more bell before the start</string>
+    <string name="module_pre_minutes">How long before the start</string>
+    <string name="module_pre_short">warning %1$d min before</string>
+    <string name="module_days">Weekdays</string>
+    <string name="module_label">Label</string>
+    <string name="module_label_placeholder">For example, Lesson 1</string>
+    <string name="module_preview">Bells</string>
+    <string name="module_problem_days">Select at least one day</string>
+    <string name="module_problem_pre">The warning bell would be before midnight</string>
+    <string name="module_problem_midnight">The lesson ends after midnight</string>
+    <string name="module_problem_until">The series must end after it starts</string>
+    <string name="module_problem_generic">Check the values</string>
+    <string name="role_start">start</string>
+    <string name="role_end">end</string>
+    <string name="role_pre">warning</string>
+
+    <!-- Templates -->
+    <string name="templates_title">Grid templates</string>
+    <string name="templates_hint">Pick a template to create lessons. You can base your own template on any of them.</string>
+    <string name="templates_hint_update">The pack already has lessons: a template updates the grid, bells and series stay.</string>
+    <string name="templates_save_from_pack">Save this pack’s grid as a template</string>
+    <string name="templates_apply">Apply</string>
+    <string name="templates_apply_update">Update grid</string>
+    <string name="templates_update_hint">The pack’s lessons (%1$d) will be replaced by the template’s. Bells and series stay.</string>
+    <string name="templates_applied">Grid updated</string>
+    <string name="template_builtin">built-in</string>
+    <string name="template_school45">School, 45 min</string>
+    <string name="template_school40">School, 40 min</string>
+    <string name="template_college">College, 2×45 pairs</string>
+    <string name="template_university">University, 90 min pairs</string>
+    <string name="template_own">mine</string>
+    <string name="template_create_from">Create from this</string>
+    <string name="template_edit">Edit</string>
+    <string name="template_new_title">New template</string>
+    <string name="template_edit_title">Template</string>
+    <string name="template_name">Template name</string>
+    <string name="template_overview">Whole day</string>
+    <string name="template_lesson_number">Lesson %1$d</string>
+    <string name="template_add_lesson">Add lesson</string>
+    <string name="template_break_line">break %1$s</string>
+    <string name="template_problem_name">Enter a template name</string>
+    <string name="template_saved">Template “%1$s” saved</string>
+    <string name="template_deleted">Template deleted</string>
+    <string name="template_delete_title">Delete the template?</string>
+    <string name="template_delete_text">Template “%1$s” will be deleted from the phone.</string>
+
+    <!-- Lesson grid -->
+    <string name="grid_title">Lesson grid</string>
+    <string name="grid_hint">Lessons from a template, with their own lesson and break lengths</string>
+    <string name="grid_open">Lesson grid</string>
+    <string name="grid_start">First lesson starts</string>
+    <string name="grid_length">Lesson</string>
+    <string name="grid_break">Break</string>
+    <string name="grid_pre_none">none</string>
+    <string name="grid_label">Lesson %d</string>
+    <string name="grid_invalid">The lessons do not fit into the day or no days are selected</string>
+    <string name="grid_too_many">Maximum modules per pack: %1$d</string>
+    <string name="grid_append">Add</string>
+    <string name="grid_create">Create</string>
+
+    <!-- Settings -->
+    <string name="settings_ring_title">Ring duration</string>
+    <string name="settings_ring_hint">How long every bell rings, scheduled and manual.</string>
+    <string name="settings_ring_device">On the device now: %1$d s</string>
+    <string name="settings_ring_custom">Custom value</string>
+    <string name="settings_ring_custom_label">Duration</string>
+    <string name="settings_ring_custom_range">From %1$d to %2$d s</string>
+    <string name="seconds_suffix">s</string>
+    <string name="reset_title">Factory reset</string>
+    <string name="reset_hint">Deletes the schedule, the mode and the ring duration on the device. The clock keeps running.</string>
+    <string name="reset_button">Reset device</string>
+    <string name="reset_confirm_title">Reset the device?</string>
+    <string name="reset_confirm_text">The whole schedule will be deleted from the device for good. Save it with “Export” if you still need it.</string>
+    <string name="reset_confirm">Reset</string>
+    <string name="reset_done">The device was reset to factory settings</string>
+    <string name="reset_done_network">The device was reset. The access point restarts with the factory name and password; join it again.</string>
+    <string name="reset_network">Also reset Wi-Fi and token</string>
+
+    <string name="network_title">Access point and token</string>
+    <string name="network_current">Now: “%1$s”, %2$s, %3$s</string>
+    <string name="network_state_open">no password</string>
+    <string name="network_state_protected">password protected</string>
+    <string name="network_state_token">token on</string>
+    <string name="network_state_no_token">no token</string>
+    <string name="network_ssid">Network name (SSID)</string>
+    <string name="network_open">Open network</string>
+    <string name="network_open_hint">Join without a password, not recommended</string>
+    <string name="network_password">New Wi-Fi password</string>
+    <string name="network_password_required">Set a password</string>
+    <string name="network_keep_current">Keep current</string>
+    <string name="network_show_password">Show password</string>
+    <string name="network_no_token">No token</string>
+    <string name="network_no_token_hint">Anyone on the device’s network can control it</string>
+    <string name="network_token">New access token</string>
+    <string name="network_token_required">Set a token</string>
+    <string name="network_apply">Apply on device</string>
+    <string name="network_confirm_title">Change network settings?</string>
+    <string name="network_confirm_restart">The access point restarts as “%1$s”. The phone disconnects; join the new network with the new password.</string>
+    <string name="network_confirm_token">The new token works immediately. The app switches to it by itself; other clients will need the new token.</string>
+    <string name="network_saved">Network settings saved</string>
+    <string name="network_saved_restart">The access point is restarting. Join the “%1$s” network.</string>
+    <string name="network_invalid_ssid">Network name: 1 to 32 bytes</string>
+    <string name="network_invalid_password">Password: 8 to 63 characters</string>
+    <string name="network_invalid_token">Token: up to 64 Latin letters, digits and symbols, no spaces</string>
+
+    <string name="language_title">Language</string>
+    <string name="language_system">System default</string>
+
+    <string name="settings_time_title">Time</string>
+    <string name="settings_auto_sync">Automatic sync</string>
+    <string name="settings_auto_sync_hint">Set the time from the phone when the device is off by more than a minute</string>
+    <string name="settings_connection_title">Connection</string>
+    <string name="settings_base_url">Device address</string>
+    <string name="settings_token">Access token (if set)</string>
+    <string name="settings_about_title">About</string>
+    <string name="settings_app_version">App</string>
+    <string name="settings_fw_version">Firmware</string>
+    <string name="settings_modules">Modules on the device</string>
+    <string name="settings_invalid_url">Invalid device address</string>
+    <string name="settings_invalid_duration">The duration must be 1 to 60 s</string>
+    <string name="settings_saved">Settings saved</string>
+    <string name="settings_saved_local">Saved in the app, but the device is unreachable</string>
+
+    <!-- Problems found before sending -->
+    <string name="issue_auto_window">The end date is before the start date</string>
+    <string name="issue_pack_window">A pack’s end date is before its start date</string>
+    <string name="issue_invalid_module">One of the packs has an invalid module</string>
+    <string name="issue_firmware_too_old">The device firmware is outdated: update it to send modules</string>
+
+    <!-- Device state -->
+    <string name="device_error_rtc_not_found">DS3231 clock not found</string>
+    <string name="device_error_time_not_set">The device time is not set</string>
+    <string name="device_error_storage">Device storage error</string>
+    <string name="device_error_wifi_ap">Could not start the access point</string>
+    <string name="device_error_unknown">Device error: %1$s</string>
+
+    <!-- Request errors -->
+    <string name="error_no_wifi">No Wi-Fi. Join the BellTimer network.</string>
+    <string name="error_timeout">The device does not respond. Check the connection to BellTimer.</string>
+    <string name="error_network">Network error: %1$s</string>
+    <string name="error_invalid_json">The device sent an invalid response</string>
+    <string name="error_unauthorized">Wrong access token. Check it in the settings.</string>
+    <string name="error_invalid_sec">Invalid ring duration (1–60 s)</string>
+    <string name="error_invalid_mode">Invalid mode</string>
+    <string name="error_invalid_datetime">Invalid date and time</string>
+    <string name="error_invalid_date">Invalid date</string>
+    <string name="error_invalid_schedule">The device rejected the schedule</string>
+    <string name="error_too_many_packs">At most 6 packs</string>
+    <string name="error_too_many_pack_modules">At most 32 modules per pack</string>
+    <string name="error_too_many_pack_dates">At most 24 single dates per pack</string>
+    <string name="error_storage_device">Could not save data on the device</string>
+    <string name="error_device_generic">Device error: %1$s</string>
+    <string name="error_http">Device error (code %1$d)</string>
+    <string name="error_unexpected">Unexpected error: %1$s</string>
+</resources>

@@ -1,0 +1,396 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Navigation -->
+    <string name="tab_now">Зараз</string>
+    <string name="tab_schedule">Расклад</string>
+    <string name="tab_settings">Налады</string>
+
+    <!-- Common -->
+    <string name="ok">ОК</string>
+    <string name="cancel">Скасаваць</string>
+    <string name="save">Захаваць</string>
+    <string name="add">Дадаць</string>
+    <string name="delete">Выдаліць</string>
+    <string name="clear">Скінуць</string>
+    <string name="change">Змяніць</string>
+    <string name="undo">Вярнуць</string>
+    <string name="open">Адкрыць</string>
+    <string name="back">Назад</string>
+    <string name="more">Яшчэ</string>
+    <string name="increase">Больш</string>
+    <string name="decrease">Менш</string>
+    <string name="unknown">невядома</string>
+    <string name="label_too_long">Занадта доўга для прылады (да 32 байт)</string>
+    <string name="seconds_value">%1$d с</string>
+    <string name="days_weekdays">Будні</string>
+    <string name="days_weekend">Выхадныя</string>
+    <string name="days_every_day">Кожны дзень</string>
+    <string name="days_none">Дні не выбраны</string>
+    <string name="duration_min">%1$d хв</string>
+    <string name="duration_h">%1$d гадз</string>
+    <string name="duration_h_min">%1$d гадз %2$d хв</string>
+    <string name="until_now">зараз</string>
+    <string name="until_in">праз %1$s</string>
+    <string name="until_days">праз %1$d дз.</string>
+
+    <plurals name="bells_count">
+        <item quantity="one">%1$d званок</item>
+        <item quantity="few">%1$d званкі</item>
+        <item quantity="many">%1$d званкоў</item>
+        <item quantity="other">%1$d званка</item>
+    </plurals>
+    <plurals name="modules_count">
+        <item quantity="one">%1$d модуль</item>
+        <item quantity="few">%1$d модулі</item>
+        <item quantity="many">%1$d модуляў</item>
+        <item quantity="other">%1$d модуля</item>
+    </plurals>
+    <plurals name="dates_count">
+        <item quantity="one">%1$d асобная дата</item>
+        <item quantity="few">%1$d асобныя даты</item>
+        <item quantity="many">%1$d асобных дат</item>
+        <item quantity="other">%1$d асобнай даты</item>
+    </plurals>
+    <plurals name="lessons_count">
+        <item quantity="one">%1$d урок</item>
+        <item quantity="few">%1$d урокі</item>
+        <item quantity="many">%1$d урокаў</item>
+        <item quantity="other">%1$d урока</item>
+    </plurals>
+
+    <!-- Connection -->
+    <string name="connection_online">На сувязі</string>
+    <string name="connection_connecting">Падключэнне</string>
+    <string name="connection_offline">Няма сувязі</string>
+    <string name="offline_hint">Няма сувязі з прыладай. Падключыце тэлефон да Wi-Fi BellTimer.</string>
+    <string name="wifi_settings">Wi-Fi</string>
+
+    <!-- Now: clock -->
+    <string name="clock_title">Час на прыладзе</string>
+    <string name="clock_unknown">Час прылады невядомы</string>
+    <string name="clock_not_set">Час на прыладзе не выстаўлены</string>
+    <string name="clock_in_sync">Супадае з часам тэлефона</string>
+    <string name="clock_ahead">Спяшаецца на %1$s</string>
+    <string name="clock_behind">Адстае на %1$s</string>
+    <string name="clock_last_sync">Сінхранізавана %1$s</string>
+    <string name="sync_button">Сінхранізаваць з тэлефонам</string>
+    <string name="sync_running">Сінхранізацыя…</string>
+    <string name="sync_done">Час сінхранізаваны з тэлефонам</string>
+    <string name="sync_done_fixed">Час сінхранізаваны, розніца была %1$s</string>
+    <string name="drift_seconds">%1$d с</string>
+    <string name="drift_minutes">%1$d хв %2$d с</string>
+    <string name="drift_hours">%1$d гадз %2$d хв</string>
+
+    <!-- Now: bell -->
+    <string name="next_title">Наступны званок</string>
+    <string name="next_none">Бліжэйшых званкоў няма</string>
+    <string name="next_manual_mode">Ручны рэжым: расклад не звініць</string>
+    <string name="lesson_running">Зараз ідзе</string>
+    <string name="lesson_left">Да канца %1$s</string>
+    <string name="ring_button">Пазваніць</string>
+    <string name="ring_left">Стоп · %1$d с</string>
+    <string name="ring_hint">Званок на %1$d с · працягласць у наладах</string>
+    <string name="ring_tap_to_stop">Націсніце, каб спыніць</string>
+
+    <!-- Now: mode -->
+    <string name="mode_title">Рэжым</string>
+    <string name="mode_auto">Аўта</string>
+    <string name="mode_manual">Уручную</string>
+    <string name="mode_auto_hint">Прылада звініць па раскладзе.</string>
+    <string name="mode_manual_hint">Расклад выключаны, званок толькі па кнопцы.</string>
+    <string name="mode_auto_set">Уключаны аўтаматычны рэжым</string>
+    <string name="mode_manual_set">Уключаны ручны рэжым</string>
+
+    <!-- Now: today -->
+    <string name="today_title">Сёння</string>
+    <string name="today_empty">Сёння званкоў няма</string>
+    <string name="today_more">Яшчэ %1$d · адкрыць расклад</string>
+    <string name="today_next">далей</string>
+    <string name="today_unsent">З улікам неадпраўленых змен</string>
+
+    <!-- Schedule -->
+    <string name="schedule_reload">Загрузіць з прылады</string>
+    <string name="schedule_import">Імпарт з файла</string>
+    <string name="schedule_export">Экспарт у файл</string>
+    <string name="schedule_loaded">Расклад загружаны з прылады</string>
+    <string name="schedule_sent">Адпраўлена: на прыладзе модуляў — %1$d</string>
+    <string name="schedule_sent_mismatch">На прыладзе модуляў — %1$d, гэта не супадае з адпраўленым</string>
+    <string name="schedule_import_success">Імпартавана модуляў: %1$d. Не забудзьцеся адправіць.</string>
+    <string name="schedule_import_error">Не ўдалося прачытаць файл раскладу</string>
+    <string name="schedule_export_success">Расклад захаваны ў файл</string>
+    <string name="schedule_export_error">Не ўдалося захаваць файл</string>
+    <string name="schedule_export_empty">Расклад пусты, няма чаго экспартаваць</string>
+    <string name="schedule_too_large">У файле больш даных, чым змяшчаецца ў прыладу</string>
+
+    <string name="week_today">Сёння</string>
+    <string name="month_prev">Папярэдні месяц</string>
+    <string name="month_next">Наступны месяц</string>
+    <string name="legend_base">асноўнае</string>
+    <string name="legend_correction">карэкцыя</string>
+    <string name="legend_muted">выхадны</string>
+
+    <string name="day_outside_auto">Па-за перыядам працы</string>
+    <string name="day_muted">Выхадны, без званкоў</string>
+    <string name="day_empty">У гэты дзень званкоў няма</string>
+    <string name="day_add_correction">Карэкцыя</string>
+    <string name="day_add_holiday">Выхадны</string>
+    <string name="calendar_hint">Націсніце на дзень, каб убачыць яго званкі</string>
+    <string name="agenda_pre">папяр. %1$s</string>
+
+    <string name="auto_window_title">Перыяд працы</string>
+    <string name="auto_window_hint">Па-за гэтымі датамі расклад не звініць. Ручны званок працуе заўсёды.</string>
+    <string name="auto_window_range">Працуе з %1$s па %2$s</string>
+    <string name="auto_window_from">Працуе з %1$s</string>
+    <string name="auto_window_to">Працуе па %1$s</string>
+    <string name="date_from">З</string>
+    <string name="date_to">Па</string>
+    <string name="date_not_set">не зададзена</string>
+
+    <string name="unsent_title">Змены не адпраўлены</string>
+    <string name="unsent_discard">Скасаваць</string>
+    <string name="unsent_send">Адправіць</string>
+
+    <!-- Packs -->
+    <string name="packs_title">Пачкі</string>
+    <string name="packs_count">%1$d з %2$d</string>
+    <string name="packs_empty_title">Раскладу пакуль няма</string>
+    <string name="packs_empty_text">Стварыце пачку і дадайце ў яе ўрокі або званкі.</string>
+    <string name="packs_not_loaded">Расклад яшчэ не загружаны з прылады. Можна пачаць новы.</string>
+    <string name="packs_empty_action">Стварыць расклад</string>
+    <string name="pack_default_name">Будні</string>
+    <string name="pack_add">Дадаць пачку</string>
+    <string name="pack_untitled">Без назвы</string>
+    <string name="pack_new_title">Новая пачка</string>
+    <string name="pack_new_base_name">Новы расклад</string>
+    <string name="pack_new_correction_name">Змены %1$s</string>
+    <string name="pack_new_holiday_name">Выхадны %1$s</string>
+    <string name="pack_new_correction_hint">Іншыя званкі %1$s замест звычайных</string>
+    <string name="pack_new_holiday_hint">Адмяніць усе званкі %1$s</string>
+    <string name="pack_kind_base">Асноўнае</string>
+    <string name="pack_kind_correction">Карэкцыя</string>
+    <string name="pack_kind_holiday">Выхадны</string>
+    <string name="pack_kind_base_hint">Асноўны расклад: дадае свае званкі да раскладу дня.</string>
+    <string name="pack_kind_correction_hint">У свае дні адмяняе званкі ўсіх «Асноўных» пачак вышэй і звініць па сваіх модулях.</string>
+    <string name="pack_name">Назва</string>
+    <string name="pack_mute">Выхадны</string>
+    <string name="pack_mute_hint">Толькі адмяніць званкі, свае модулі не патрэбны</string>
+    <string name="pack_holiday_hint">У даты гэтай пачкі званкі «Асноўных» пачак вышэй адмяняюцца. Задайце даты ў «Калі дзейнічае».</string>
+    <string name="pack_enabled">Уключана</string>
+    <string name="pack_enabled_on">Удзельнічае ў раскладзе</string>
+    <string name="pack_enabled_off">Выключана і не звініць</string>
+    <string name="pack_open">Рэдагаваць</string>
+    <string name="pack_enable">Уключыць</string>
+    <string name="pack_disable">Выключыць</string>
+    <string name="pack_drag">Перацягнуць</string>
+    <string name="packs_drag_hint">Націсніце на пачку для дзеянняў. Парадак важны для карэкцый: утрымлівайце картку і перацягніце.</string>
+    <string name="pack_move_up">Вышэй</string>
+    <string name="pack_move_down">Ніжэй</string>
+    <string name="pack_duplicate">Дубляваць</string>
+    <string name="pack_copy_suffix">(копія)</string>
+    <string name="pack_shift">Зрушыць усё</string>
+    <string name="pack_clear">Ачысціць</string>
+    <string name="pack_clear_title">Ачысціць пачку?</string>
+    <string name="pack_clear_text">Усе модулі гэтай пачкі будуць выдалены.</string>
+    <string name="pack_cleared">Модулі выдалены</string>
+    <string name="pack_delete">Выдаліць пачку</string>
+    <string name="pack_delete_title">Выдаліць пачку?</string>
+    <string name="pack_delete_text">«%1$s» і ўсе яе модулі будуць выдалены.</string>
+    <string name="pack_deleted">Пачка выдалена</string>
+
+    <string name="window_title">Калі дзейнічае</string>
+    <string name="window_hint">Пачка працуе ў дыяпазоне дат або ў асобныя даты. Без абмежаванняў — заўсёды.</string>
+    <string name="window_always">Заўсёды</string>
+    <string name="window_from">з %1$s</string>
+    <string name="window_to">па %1$s</string>
+    <string name="window_yearly">Кожны год</string>
+    <string name="window_yearly_hint">Параўноўваць толькі дзень і месяц</string>
+    <string name="window_yearly_short">штогод</string>
+    <string name="window_dates">Асобныя даты</string>
+    <string name="window_add_date">Дадаць дату</string>
+
+    <string name="shift_title">Зрушыць усе модулі</string>
+    <string name="shift_hint">Усе званкі пачкі перамесцяцца на зададзеную колькасць хвілін.</string>
+    <string name="shift_minutes">Хвіліны</string>
+    <string name="shift_apply">Зрушыць</string>
+    <string name="shift_overflow">Званкі выйдуць за межы сутак</string>
+
+    <!-- Modules -->
+    <string name="modules_title">Модулі</string>
+    <string name="modules_count">%1$d з %2$d</string>
+    <string name="modules_empty_title">Модуляў пакуль няма</string>
+    <string name="modules_empty_text">Збярыце сетку ўрокаў цалкам або дадайце модулі па адным.</string>
+    <string name="module_add">Модуль</string>
+    <string name="module_add_title">Што дадаць?</string>
+    <string name="module_deleted">Модуль выдалены</string>
+    <string name="module_lesson">Урок</string>
+    <string name="module_bell">Званок</string>
+    <string name="module_series">Серыя</string>
+    <string name="module_lesson_hint">Два званкі: на пачатку і ў канцы, можна з папярэднім</string>
+    <string name="module_bell_hint">Адзін званок у зададзены час</string>
+    <string name="module_series_hint">Званок кожныя N хвілін у зададзеным інтэрвале</string>
+    <string name="module_new_title">Новы модуль</string>
+    <string name="module_edit_title">Модуль</string>
+    <string name="module_time">Час</string>
+    <string name="module_start">Пачатак</string>
+    <string name="module_end">Канец</string>
+    <string name="module_length">Працягласць</string>
+    <string name="module_from">З</string>
+    <string name="module_until">Да</string>
+    <string name="module_every">Інтэрвал</string>
+    <string name="module_every_short">кожныя %1$s</string>
+    <string name="module_pre">Папярэдні званок</string>
+    <string name="module_pre_hint">Яшчэ адзін званок перад пачаткам</string>
+    <string name="module_pre_minutes">За колькі да пачатку</string>
+    <string name="module_pre_short">папяр. за %1$d хв</string>
+    <string name="module_days">Дні тыдня</string>
+    <string name="module_label">Подпіс</string>
+    <string name="module_label_placeholder">Напрыклад, 1 урок</string>
+    <string name="module_preview">Званкі</string>
+    <string name="module_problem_days">Выберыце хаця б адзін дзень</string>
+    <string name="module_problem_pre">Папярэдні званок раней за поўнач</string>
+    <string name="module_problem_midnight">Урок заканчваецца пасля поўначы</string>
+    <string name="module_problem_until">Канец серыі павінен быць пазней за пачатак</string>
+    <string name="module_problem_generic">Праверце значэнні</string>
+    <string name="role_start">пачатак</string>
+    <string name="role_end">канец</string>
+    <string name="role_pre">папярэдні</string>
+
+    <!-- Templates -->
+    <string name="templates_title">Шаблоны сеткі</string>
+    <string name="templates_hint">Выберыце шаблон, каб стварыць урокі. Свой шаблон можна зрабіць на аснове любога.</string>
+    <string name="templates_hint_update">У пачцы ўжо ёсць урокі: шаблон абновіць сетку, званкі і серыі застануцца.</string>
+    <string name="templates_save_from_pack">Захаваць сетку пачкі як шаблон</string>
+    <string name="templates_apply">Ужыць</string>
+    <string name="templates_apply_update">Абнавіць сетку</string>
+    <string name="templates_update_hint">Урокі пачкі (%1$d) будуць заменены ўрокамі шаблону. Званкі і серыі застануцца.</string>
+    <string name="templates_applied">Сетка абноўлена</string>
+    <string name="template_builtin">убудаваны</string>
+    <string name="template_school45">Школа, 45 хв</string>
+    <string name="template_school40">Школа, 40 хв</string>
+    <string name="template_college">Каледж, пары 2×45</string>
+    <string name="template_university">ВНУ, пары 90 хв</string>
+    <string name="template_own">мой</string>
+    <string name="template_create_from">Стварыць на аснове</string>
+    <string name="template_edit">Змяніць</string>
+    <string name="template_new_title">Новы шаблон</string>
+    <string name="template_edit_title">Шаблон</string>
+    <string name="template_name">Назва шаблону</string>
+    <string name="template_overview">Дзень цалкам</string>
+    <string name="template_lesson_number">%1$d урок</string>
+    <string name="template_add_lesson">Дадаць урок</string>
+    <string name="template_break_line">перапынак %1$s</string>
+    <string name="template_problem_name">Увядзіце назву шаблону</string>
+    <string name="template_saved">Шаблон «%1$s» захаваны</string>
+    <string name="template_deleted">Шаблон выдалены</string>
+    <string name="template_delete_title">Выдаліць шаблон?</string>
+    <string name="template_delete_text">Шаблон «%1$s» будзе выдалены з тэлефона.</string>
+
+    <!-- Lesson grid -->
+    <string name="grid_title">Сетка ўрокаў</string>
+    <string name="grid_hint">Урокі па шаблоне: свае працягласці ўрокаў і перапынкаў</string>
+    <string name="grid_open">Сетка ўрокаў</string>
+    <string name="grid_start">Першы ўрок пачынаецца</string>
+    <string name="grid_length">Урок</string>
+    <string name="grid_break">Перапынак</string>
+    <string name="grid_pre_none">няма</string>
+    <string name="grid_label">%d урок</string>
+    <string name="grid_invalid">Урокі не змяшчаюцца ў суткі або не выбраны дні</string>
+    <string name="grid_too_many">У пачку змяшчаецца не больш за %1$d модуляў</string>
+    <string name="grid_append">Дадаць</string>
+    <string name="grid_create">Стварыць</string>
+
+    <!-- Settings -->
+    <string name="settings_ring_title">Працягласць званка</string>
+    <string name="settings_ring_hint">Колькі звініць кожны званок, па раскладзе і па кнопцы.</string>
+    <string name="settings_ring_device">Цяпер на прыладзе: %1$d с</string>
+    <string name="settings_ring_custom">Сваё значэнне</string>
+    <string name="settings_ring_custom_label">Працягласць</string>
+    <string name="settings_ring_custom_range">Ад %1$d да %2$d с</string>
+    <string name="seconds_suffix">с</string>
+    <string name="reset_title">Скід да заводскіх налад</string>
+    <string name="reset_hint">Выдаляе на прыладзе расклад, рэжым і працягласць званка. Гадзіннік працягвае ісці.</string>
+    <string name="reset_button">Скінуць прыладу</string>
+    <string name="reset_confirm_title">Скінуць прыладу?</string>
+    <string name="reset_confirm_text">Увесь расклад будзе выдалены з прылады без магчымасці аднаўлення. Захавайце яго праз «Экспарт», калі ён яшчэ спатрэбіцца.</string>
+    <string name="reset_confirm">Скінуць</string>
+    <string name="reset_done">Прылада скінута да заводскіх налад</string>
+    <string name="reset_done_network">Прылада скінута. Кропка доступу перазапускаецца з заводскімі назвай і паролем — падключыце тэлефон да яе нанова.</string>
+    <string name="reset_network">Таксама скінуць Wi-Fi і токен</string>
+
+    <string name="network_title">Кропка доступу і токен</string>
+    <string name="network_current">Цяпер: «%1$s», %2$s, %3$s</string>
+    <string name="network_state_open">без пароля</string>
+    <string name="network_state_protected">з паролем</string>
+    <string name="network_state_token">токен уключаны</string>
+    <string name="network_state_no_token">без токена</string>
+    <string name="network_ssid">Назва сеткі (SSID)</string>
+    <string name="network_open">Адкрытая сетка</string>
+    <string name="network_open_hint">Падключацца без пароля — не рэкамендуецца</string>
+    <string name="network_password">Новы пароль Wi-Fi</string>
+    <string name="network_password_required">Задайце пароль</string>
+    <string name="network_keep_current">Пакінуць бягучы</string>
+    <string name="network_show_password">Паказаць пароль</string>
+    <string name="network_no_token">Без токена</string>
+    <string name="network_no_token_hint">Кіраваць прыладай можа кожны, хто падключаны да яе сеткі</string>
+    <string name="network_token">Новы токен доступу</string>
+    <string name="network_token_required">Задайце токен</string>
+    <string name="network_apply">Ужыць на прыладзе</string>
+    <string name="network_confirm_title">Змяніць налады сеткі?</string>
+    <string name="network_confirm_restart">Кропка доступу перазапусціцца як «%1$s». Тэлефон адключыцца — падключыце яго да новай сеткі з новым паролем.</string>
+    <string name="network_confirm_token">Новы токен пачне дзейнічаць адразу. Праграма пераключыцца на яго сама; іншым кліентам спатрэбіцца новы токен.</string>
+    <string name="network_saved">Налады сеткі захаваны</string>
+    <string name="network_saved_restart">Кропка доступу перазапускаецца. Падключыце тэлефон да сеткі «%1$s».</string>
+    <string name="network_invalid_ssid">Назва сеткі: ад 1 да 32 байт</string>
+    <string name="network_invalid_password">Пароль: ад 8 да 63 сімвалаў</string>
+    <string name="network_invalid_token">Токен: да 64 лацінскіх літар, лічбаў і знакаў, без прабелаў</string>
+
+    <string name="language_title">Мова</string>
+    <string name="language_system">Як у сістэме</string>
+
+    <string name="settings_time_title">Час</string>
+    <string name="settings_auto_sync">Аўтасінхранізацыя</string>
+    <string name="settings_auto_sync_hint">Выстаўляць час з тэлефона, калі на прыладзе ён збіўся больш чым на хвіліну</string>
+    <string name="settings_connection_title">Падключэнне</string>
+    <string name="settings_base_url">Адрас прылады</string>
+    <string name="settings_token">Токен доступу (калі зададзены)</string>
+    <string name="settings_about_title">Пра сістэму</string>
+    <string name="settings_app_version">Праграма</string>
+    <string name="settings_fw_version">Прашыўка</string>
+    <string name="settings_modules">Модуляў на прыладзе</string>
+    <string name="settings_invalid_url">Няправільны адрас прылады</string>
+    <string name="settings_invalid_duration">Працягласць павінна быць ад 1 да 60 с</string>
+    <string name="settings_saved">Налады захаваны</string>
+    <string name="settings_saved_local">Захавана ў праграме, але прылада недаступная</string>
+
+    <!-- Problems found before sending -->
+    <string name="issue_auto_window">Дата заканчэння раней за дату пачатку</string>
+    <string name="issue_pack_window">У пачцы дата заканчэння раней за дату пачатку</string>
+    <string name="issue_invalid_module">У адной з пачак ёсць модуль з памылкай</string>
+    <string name="issue_firmware_too_old">Прашыўка прылады састарэла: абнавіце яе, каб адпраўляць модулі</string>
+
+    <!-- Device state -->
+    <string name="device_error_rtc_not_found">Гадзіннік DS3231 не знойдзены</string>
+    <string name="device_error_time_not_set">Час на прыладзе не выстаўлены</string>
+    <string name="device_error_storage">Памылка памяці прылады</string>
+    <string name="device_error_wifi_ap">Не ўдалося запусціць кропку доступу</string>
+    <string name="device_error_unknown">Памылка прылады: %1$s</string>
+
+    <!-- Request errors -->
+    <string name="error_no_wifi">Няма Wi-Fi. Падключыцеся да сеткі BellTimer.</string>
+    <string name="error_timeout">Прылада не адказвае. Праверце падключэнне да BellTimer.</string>
+    <string name="error_network">Памылка сеткі: %1$s</string>
+    <string name="error_invalid_json">Прылада вярнула няправільны адказ</string>
+    <string name="error_unauthorized">Няправільны токен доступу. Праверце яго ў наладах.</string>
+    <string name="error_invalid_sec">Недапушчальная працягласць званка (1–60 с)</string>
+    <string name="error_invalid_mode">Недапушчальны рэжым</string>
+    <string name="error_invalid_datetime">Недапушчальныя дата і час</string>
+    <string name="error_invalid_date">Недапушчальная дата</string>
+    <string name="error_invalid_schedule">Прылада адхіліла расклад</string>
+    <string name="error_too_many_packs">Не больш за 6 пачак</string>
+    <string name="error_too_many_pack_modules">Не больш за 32 модулі ў пачцы</string>
+    <string name="error_too_many_pack_dates">Не больш за 24 асобныя даты ў пачцы</string>
+    <string name="error_storage_device">Не ўдалося захаваць даныя на прыладзе</string>
+    <string name="error_device_generic">Памылка прылады: %1$s</string>
+    <string name="error_http">Памылка прылады (код %1$d)</string>
+    <string name="error_unexpected">Нечаканая памылка: %1$s</string>
+</resources>
