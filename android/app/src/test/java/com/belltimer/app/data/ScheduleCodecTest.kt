@@ -1,171 +1,144 @@
 package com.belltimer.app.data
 
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDate
 
 class ScheduleCodecTest {
 
-    private fun bell(
-        time: String,
-        pair: String? = null,
-        days: Set<Int> = WEEKDAYS,
-        label: String = "",
-    ) = BellEntry(time = time, pair = pair, days = days, label = label)
+    private val lenient = Json { ignoreUnknownKeys = true }
 
-    @Test
-    fun `decodes version 1 flat entries into one base pack`() {
-        val json = """
-            {"version":1,"entries":[
-              {"time":"08:00","days":[1,2,3],"duration":7,"label":"Урок 1"},
-              {"time":"9:05","days":[1,2,3],"duration":5,"label":""}
-            ]}
-        """.trimIndent()
-
-        val schedule = ScheduleCodec.decode(json)
-        val pack = schedule.packs.single()
-        assertEquals(PackKind.Base, pack.kind)
-        assertEquals(listOf("08:00", "09:05"), pack.entries.map { it.time })
-        assertEquals(setOf(1, 2, 3), pack.entries.first().days)
-        assertEquals(setOf(1, 2, 3), pack.weekdayUnion)
-    }
-
-    @Test
-    fun `decodes version 2 exceptions into corrections`() {
-        val json = """
-            {"version":2,
-             "groups":[
-               {"id":1,"name":"Будни","days":[1,2,3,4,5],
-                "entries":[{"time":"08:00","duration":5,"label":"Урок 1"},
-                           {"time":"08:45","duration":5,"label":"Урок 1 конец"}]},
-               {"id":2,"name":"Суббота","days":[6],"entries":[{"time":"09:00","duration":5}]}
-             ],
-             "exceptions":[
-               {"date":"2026-11-04","mute":true},
-               {"date":"2026-11-07","group_id":2}
-             ]}
-        """.trimIndent()
-
-        val schedule = ScheduleCodec.decode(json)
-        assertEquals(4, schedule.packs.size)
-        assertEquals(2, schedule.packs.count { it.kind == PackKind.Base })
-
-        val muted = schedule.packs.first { it.mute }
-        assertEquals(setOf(LocalDate.of(2026, 11, 4)), muted.window.dates)
-
-        val replaced = schedule.packs.last()
-        assertEquals(PackKind.Correction, replaced.kind)
-        assertEquals(listOf("09:00"), replaced.entries.map { it.time })
-        assertEquals(setOf(LocalDate.of(2026, 11, 7)), replaced.window.dates)
-    }
-
-    @Test
-    fun `decodes version 3 groups and overrides`() {
-        val json = """
-            {"version":3,
-             "groups":[{"id":1,"name":"Будни","days":[1,2,3,4,5],
-                        "entries":[{"time":"08:00","duration":5,"label":"Урок 1"}]}],
-             "overrides":[
-               {"date":"2026-11-13","mode":"add",
-                "entries":[{"time":"12:30","duration":10,"label":"Доп. звонок"}]},
-               {"date":"2026-11-14","mode":"mute","entries":[{"time":"10:00"}]},
-               {"date":"2026-11-16","mode":"replace","based_on":1,
-                "entries":[{"time":"09:00","duration":5,"label":"Урок 1"}]}
-             ],
-             "auto":{"start":"2026-09-01","stop":"2027-05-31"}}
-        """.trimIndent()
-
-        val schedule = ScheduleCodec.decode(json)
-
-        // base group, add override as a date-limited base pack, then corrections
-        assertEquals(4, schedule.packs.size)
-        assertEquals(listOf(PackKind.Base, PackKind.Base, PackKind.Correction, PackKind.Correction),
-            schedule.packs.map { it.kind })
-
-        val added = schedule.packs[1]
-        assertEquals(setOf(LocalDate.of(2026, 11, 13)), added.window.dates)
-        assertEquals(listOf("12:30"), added.entries.map { it.time })
-
-        assertTrue(schedule.packs[2].mute)
-        assertEquals(setOf(LocalDate.of(2026, 11, 14)), schedule.packs[2].window.dates)
-        assertEquals(listOf("09:00"), schedule.packs[3].entries.map { it.time })
-        assertEquals(LocalDate.of(2026, 9, 1), schedule.auto.start)
-    }
-
-    @Test
-    fun `empty replace override becomes a mute correction`() {
-        val json = """
-            {"version":3,
-             "groups":[{"id":1,"name":"Будни","days":[1,2,3,4,5],
-                        "entries":[{"time":"08:00","duration":5}]}],
-             "overrides":[{"date":"2026-11-04","mode":"replace","entries":[]}]}
-        """.trimIndent()
-
-        val schedule = ScheduleCodec.decode(json)
-        val correction = schedule.packs.last()
-        assertEquals(PackKind.Correction, correction.kind)
-        assertTrue(correction.mute)
-        assertTrue(correction.entries.isEmpty())
-        assertTrue(schedule.bellsFor(LocalDate.of(2026, 11, 4)).isEmpty())
-    }
-
-    @Test
-    fun `ignores unknown keys`() {
-        val json = """
-            {"version":4,"future_field":true,
-             "packs":[{"id":1,"kind":"base","entries":[{"time":"08:00","extra":1}]}]}
-        """.trimIndent()
-        val schedule = ScheduleCodec.decode(json)
-        assertEquals(listOf("08:00"), schedule.packs.single().entries.map { it.time })
-    }
-
-    @Test
-    fun `encodes version 4 and round-trips`() {
-        val schedule = BellSchedule(
-            packs = listOf(
-                SchedulePack(
-                    id = 1,
-                    name = "Будни",
-                    kind = PackKind.Base,
-                    window = PackWindow(
-                        from = LocalDate.of(2026, 9, 1),
-                        to = LocalDate.of(2027, 5, 31),
-                        dates = setOf(LocalDate.of(2026, 11, 7)),
-                        yearly = true,
-                    ),
-                    entries = listOf(
-                        bell("08:00", pair = "08:45", days = WEEKDAYS, label = "Урок 1"),
-                    ),
-                ),
-                SchedulePack(
-                    id = 2,
-                    name = "Коррекция",
-                    kind = PackKind.Correction,
-                    enabled = false,
-                    window = PackWindow(dates = setOf(LocalDate.of(2026, 11, 4))),
-                    entries = listOf(bell("10:00", days = ALL_DAYS)),
+    private val sample = BellSchedule(
+        packs = listOf(
+            SchedulePack(
+                id = 1,
+                name = "Будни",
+                window = PackWindow(from = LocalDate.of(2026, 9, 1), to = LocalDate.of(2027, 5, 31)),
+                modules = listOf(
+                    ScheduleModule(type = ModuleType.Lesson, start = 8 * 60, length = 45, pre = 2, label = "1 урок"),
+                    ScheduleModule(type = ModuleType.Bell, start = 12 * 60, days = ALL_DAYS, label = "Обед"),
+                    ScheduleModule(type = ModuleType.Series, start = 13 * 60, until = 17 * 60, every = 60),
                 ),
             ),
-            auto = AutoWindow(LocalDate.of(2026, 9, 1), LocalDate.of(2027, 5, 31)),
-        )
+            SchedulePack(
+                id = 2,
+                name = "Праздник",
+                kind = PackKind.Correction,
+                mute = true,
+                window = PackWindow(dates = setOf(LocalDate.of(2026, 11, 4)), yearly = true),
+            ),
+        ),
+        auto = AutoWindow(start = LocalDate.of(2026, 9, 1)),
+    )
 
-        val text = ScheduleCodec.encode(schedule)
-        assertTrue(text.contains("\"version\": 4"))
-        assertTrue(text.contains("\"kind\": \"correction\""))
-        assertTrue(text.contains("\"pair\": \"08:45\""))
-        assertTrue(text.contains("\"enabled\": false"))
-        assertFalse(text.contains("\"groups\""))
-        assertFalse(text.contains("\"overrides\""))
-        assertFalse(text.contains("\"duration\""))
-
+    @Test
+    fun roundTripKeepsEverything() {
+        // Fields a module type does not use are not written, so compare what
+        // the device would receive and what would ring.
+        val text = ScheduleCodec.encode(sample)
         val decoded = ScheduleCodec.decode(text)
-        assertEquals(schedule, decoded)
+        assertEquals(text, ScheduleCodec.encode(decoded))
+        val day = LocalDate.of(2026, 11, 2)
+        assertEquals(sample.resolveDay(day).map { it.minute }, decoded.resolveDay(day).map { it.minute })
+    }
 
-        val again = ScheduleCodec.decode(ScheduleCodec.encode(decoded))
-        assertNotNull(again)
-        assertEquals(decoded, again)
+    @Test
+    fun encodesOnlyTheFieldsOfEachType() {
+        val root = Json.parseToJsonElement(ScheduleCodec.encode(sample)).jsonObject
+        assertEquals("5", root["version"]!!.jsonPrimitive.content)
+        val modules = root["packs"]!!.jsonArray[0].jsonObject["modules"]!!.jsonArray
+        val lesson = modules[0].jsonObject
+        assertEquals("lesson", lesson["type"]!!.jsonPrimitive.content)
+        assertEquals("45", lesson["length"]!!.jsonPrimitive.content)
+        assertNull(lesson["until"])
+        val bell = modules[1].jsonObject
+        assertNull(bell["length"])
+        assertNull(bell["pre"])
+        val series = modules[2].jsonObject
+        assertEquals("17:00", series["until"]!!.jsonPrimitive.content)
+        assertEquals("60", series["every"]!!.jsonPrimitive.content)
+        assertTrue(root["packs"]!!.jsonArray[1].jsonObject["mute"]!!.jsonPrimitive.content.toBoolean())
+    }
+
+    @Test
+    fun version4EntriesBecomeModules() {
+        val v4 = """
+            {"version":4,"packs":[{"id":3,"name":"Старое","kind":"base","entries":[
+              {"time":"08:30","pair":"09:15","days":[1,2,3,4,5],"label":"1 урок"},
+              {"time":"12:00","days":[],"label":"Обед"}
+            ]}]}
+        """.trimIndent()
+        val pack = ScheduleCodec.decode(v4).packs.single()
+        assertEquals(3, pack.id)
+        val lesson = pack.modules[0]
+        assertEquals(ModuleType.Lesson, lesson.type)
+        assertEquals(8 * 60 + 30, lesson.start)
+        assertEquals(45, lesson.length)
+        assertEquals(WEEKDAYS, lesson.days)
+        val bell = pack.modules[1]
+        assertEquals(ModuleType.Bell, bell.type)
+        assertEquals(ALL_DAYS, bell.days)
+    }
+
+    @Test
+    fun unknownModuleTypesAndBadValuesAreSkipped() {
+        val text = """
+            {"version":5,"packs":[{"id":1,"modules":[
+              {"type":"siren","time":"08:00"},
+              {"type":"lesson","time":"23:50","length":45},
+              {"type":"bell","time":"07:00"}
+            ]}]}
+        """.trimIndent()
+        val modules = ScheduleCodec.decode(text).packs.single().modules
+        assertEquals(1, modules.size)
+        assertEquals(7 * 60, modules.single().start)
+    }
+
+    @Test
+    fun muteIsDroppedOnBasePacks() {
+        val text = """{"packs":[{"id":1,"kind":"base","mute":true}]}"""
+        assertFalse(ScheduleCodec.decode(text).packs.single().mute)
+    }
+
+    @Test
+    fun duplicatePackIdsAreRenumbered() {
+        val text = """{"packs":[{"id":2},{"id":2}]}"""
+        assertEquals(listOf(2, 1), ScheduleCodec.decode(text).packs.map { it.id })
+    }
+
+    @Test
+    fun validationReportsLimitsAndOldFirmware() {
+        assertNull(sample.validate(API_MODULES))
+        assertEquals(ScheduleIssue.FirmwareTooOld(4), sample.validate(4))
+        val tooMany = SchedulePack(id = 1, modules = List(MAX_PACK_MODULES + 1) { ScheduleModule(start = it) })
+        assertEquals(ScheduleIssue.TooManyPackModules, BellSchedule(listOf(tooMany)).validate(API_MODULES))
+        val broken = SchedulePack(id = 1, modules = listOf(ScheduleModule(type = ModuleType.Lesson, start = 23 * 60 + 50)))
+        assertEquals(ScheduleIssue.InvalidModule, BellSchedule(listOf(broken)).validate(API_MODULES))
+    }
+
+    @Test
+    fun statusMapsNextBellAndSync() {
+        val dto = lenient.decodeFromString<StatusDto>(
+            """
+            {"time":"2026-10-23T08:40:00","rtc_ok":true,"mode":"auto","modules":7,"today_bells":12,
+             "synced":"2026-10-22T19:00:05","next":{"date":"2026-10-23","time":"09:15","label":"1 урок",
+             "type":"lesson","role":"end"},"errors":[],"fw":"2.0.0","api":5}
+            """.trimIndent(),
+        )
+        val status = dto.toDomain()
+        assertEquals(7, status.modules)
+        val next = status.next!!
+        assertEquals(BellRole.End, next.role)
+        assertEquals(ModuleType.Lesson, next.type)
+        assertEquals(9, next.at.hour)
+        assertEquals(2026, status.lastSync!!.year)
+        assertTrue(status.supportsModules)
     }
 }

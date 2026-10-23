@@ -14,6 +14,7 @@ class SettingsStore(context: Context) {
             token = prefs.getString(KEY_TOKEN, "").orEmpty(),
             ringDefault = prefs.getInt(KEY_RING_DEFAULT, DEFAULT_RING_SECONDS)
                 .coerceIn(MIN_RING_SECONDS, MAX_RING_SECONDS),
+            autoSyncTime = prefs.getBoolean(KEY_AUTO_SYNC, true),
         )
     }
 
@@ -22,6 +23,7 @@ class SettingsStore(context: Context) {
             putString(KEY_BASE_URL, settings.baseUrl)
             putString(KEY_TOKEN, settings.token)
             putInt(KEY_RING_DEFAULT, settings.ringDefault)
+            putBoolean(KEY_AUTO_SYNC, settings.autoSyncTime)
         }
     }
 
@@ -30,5 +32,6 @@ class SettingsStore(context: Context) {
         const val KEY_BASE_URL = "base_url"
         const val KEY_TOKEN = "token"
         const val KEY_RING_DEFAULT = "ring_default"
+        const val KEY_AUTO_SYNC = "auto_sync_time"
     }
 }
