@@ -51,6 +51,8 @@
   for its options, drag packs to reorder. Pack kinds are named "Основное" and
   "Коррекция".
 * Back from the Schedule or Settings tab returns to the main tab.
+* The day sheet lists every pack with a checkbox that adds the day to (or
+  removes it from) the pack's single dates, corrections first.
 * English and Belarusian translations, with a language picker in the settings
   (it also follows the per-app language of Android 13+).
 * Settings card to change the device's access point name, Wi-Fi password and

@@ -179,6 +179,16 @@ data class PackWindow(
     private fun matches(expected: LocalDate, date: LocalDate): Boolean =
         if (yearly) monthDay(expected) == monthDay(date) else expected == date
 
+    /** Whether [date] is one of the individual dates (by day and month when yearly). */
+    fun hasDate(date: LocalDate): Boolean = dates.any { matches(it, date) }
+
+    /** Whether the date range alone (not the individual dates) covers [date]. */
+    fun rangeCovers(date: LocalDate): Boolean = hasRange && inRange(date)
+
+    fun withDate(date: LocalDate): PackWindow = if (hasDate(date)) this else copy(dates = dates + date)
+
+    fun withoutDate(date: LocalDate): PackWindow = copy(dates = dates.filterNot { matches(it, date) }.toSet())
+
     private fun monthDay(date: LocalDate): Int = date.monthValue * 100 + date.dayOfMonth
 }
 

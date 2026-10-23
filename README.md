@@ -203,7 +203,9 @@ phone); add a release keystore if you need a Play-style signed build.
    minute. Below are the running lesson with its progress, the next bell, the
    big ring button, the Авто/Вручную switch and today's bells.
 5. **Расписание** shows a full month calendar coloured by day kind; tap a
-   day to see its bells and to add a correction or a holiday for it. Below is
+   day to see its bells, create a new correction or day off for it, or tick
+   existing packs to add the date to them (for example an existing
+   correction). Below is
    the list of **packs** (`пачки`): tap a pack for its options (edit, enable,
    duplicate, move, delete), long-press or drag its handle to reorder. A pack
    holds **modules**:

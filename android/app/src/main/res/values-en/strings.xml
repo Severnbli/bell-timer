@@ -124,8 +124,15 @@
     <string name="day_outside_auto">Outside the working period</string>
     <string name="day_muted">Day off, no bells</string>
     <string name="day_empty">No bells on this day</string>
-    <string name="day_add_correction">Correction</string>
-    <string name="day_add_holiday">Day off</string>
+    <string name="day_add_correction">New correction</string>
+    <string name="day_add_holiday">New day off</string>
+    <string name="day_packs_title">Packs on this day</string>
+    <string name="day_packs_hint">Tick a pack to add this date to its single dates.</string>
+    <string name="day_pack_by_range">Active through its date range</string>
+    <string name="day_pack_by_date">Date added</string>
+    <string name="day_pack_always">Active every day now; with a date only on the ticked days</string>
+    <string name="day_pack_full">Date limit reached (%1$d)</string>
+    <string name="day_pack_no_modules">No modules on %1$s, so the pack changes nothing on this day</string>
     <string name="calendar_hint">Tap a day to see its bells</string>
     <string name="agenda_pre">warning %1$s</string>
 

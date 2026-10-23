@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
@@ -79,6 +80,8 @@ import com.belltimer.app.data.BellRole
 import com.belltimer.app.data.BellSchedule
 import com.belltimer.app.data.DayKind
 import com.belltimer.app.data.MAX_PACKS
+import com.belltimer.app.data.MAX_PACK_DATES
+import com.belltimer.app.data.canAddDate
 import com.belltimer.app.data.ModuleType
 import com.belltimer.app.data.PackKind
 import com.belltimer.app.data.ResolvedBell
@@ -253,6 +256,17 @@ fun ScheduleScreen(state: UiState, viewModel: AppViewModel, onOpenPack: (Int) ->
                         addForSelected(mute = true)
                     })
                 }
+                if (schedule.packs.isNotEmpty()) {
+                    Spacer(Modifier.height(20.dp))
+                    DayPacks(
+                        packs = schedule.packs,
+                        date = selected,
+                        onToggle = { pack, add ->
+                            val window = if (add) pack.window.withDate(selected) else pack.window.withoutDate(selected)
+                            viewModel.updateSchedule(schedule.withPack(pack.copy(window = window)))
+                        },
+                    )
+                }
             }
         }
     }
@@ -399,6 +413,84 @@ private fun ScheduleHeader(state: UiState, viewModel: AppViewModel, onAutoWindow
                         exportLauncher.launch("bell-schedule-${LocalDate.now()}.json")
                     },
                 )
+            }
+        }
+    }
+}
+
+/**
+ * Every pack with a checkbox that adds the date to (or removes it from) the
+ * pack's individual dates. Corrections come first: that is what a single day
+ * usually needs.
+ */
+@Composable
+private fun DayPacks(
+    packs: List<SchedulePack>,
+    date: LocalDate,
+    onToggle: (SchedulePack, Boolean) -> Unit,
+) {
+    Text(stringResource(R.string.day_packs_title), style = MaterialTheme.typography.titleMedium)
+    Text(
+        stringResource(R.string.day_packs_hint),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(8.dp))
+    for (pack in packs.sortedBy { it.kind != PackKind.Correction }) {
+        val byRange = pack.window.rangeCovers(date)
+        val byDate = pack.window.hasDate(date)
+        val canAdd = pack.canAddDate()
+        val checked = byRange || byDate
+        val enabled = !byRange && (byDate || canAdd)
+        val noModulesThatDay = !pack.mute && pack.modulesFor(date).isEmpty()
+        val status = when {
+            byRange -> stringResource(R.string.day_pack_by_range)
+            byDate -> stringResource(R.string.day_pack_by_date)
+            !pack.window.isSet -> stringResource(R.string.day_pack_always)
+            !canAdd -> stringResource(R.string.day_pack_full, MAX_PACK_DATES)
+            else -> windowSummary(pack.window)
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(MaterialTheme.shapes.medium)
+                .clickable(enabled = enabled) { onToggle(pack, !checked) }
+                .alpha(if (enabled || checked) 1f else 0.5f)
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Checkbox(checked = checked, onCheckedChange = { onToggle(pack, it) }, enabled = enabled)
+            Box(
+                modifier = Modifier
+                    .size(width = 4.dp, height = 36.dp)
+                    .clip(CircleShape)
+                    .background(AppColors.pack(pack.kind)),
+            )
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        pack.displayName(),
+                        style = MaterialTheme.typography.bodyLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    PackKindChip(pack)
+                }
+                Text(
+                    text = status,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (!pack.window.isSet && !checked) AppColors.extra.warning else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (noModulesThatDay && pack.enabled) {
+                    Text(
+                        text = stringResource(R.string.day_pack_no_modules, weekdayShort(date.dayOfWeek.value)),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AppColors.extra.warning,
+                    )
+                }
             }
         }
     }

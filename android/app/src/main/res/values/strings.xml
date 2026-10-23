@@ -130,8 +130,15 @@
     <string name="day_outside_auto">Вне периода работы</string>
     <string name="day_muted">Выходной — без звонков</string>
     <string name="day_empty">В этот день звонков нет</string>
-    <string name="day_add_correction">Коррекция</string>
-    <string name="day_add_holiday">Выходной</string>
+    <string name="day_add_correction">Новая коррекция</string>
+    <string name="day_add_holiday">Новый выходной</string>
+    <string name="day_packs_title">Пачки в этот день</string>
+    <string name="day_packs_hint">Отметьте пачку, чтобы добавить в неё эту дату как отдельную.</string>
+    <string name="day_pack_by_range">Действует по диапазону дат</string>
+    <string name="day_pack_by_date">Дата добавлена</string>
+    <string name="day_pack_always">Сейчас действует всегда; с датой — только в отмеченные дни</string>
+    <string name="day_pack_full">Достигнут лимит дат (%1$d)</string>
+    <string name="day_pack_no_modules">Нет модулей на %1$s — в этот день пачка ничего не изменит</string>
     <string name="calendar_hint">Нажмите на день, чтобы увидеть его звонки</string>
     <string name="agenda_pre">предв. %1$s</string>
 

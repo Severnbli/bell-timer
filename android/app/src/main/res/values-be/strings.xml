@@ -132,8 +132,15 @@
     <string name="day_outside_auto">Па-за перыядам працы</string>
     <string name="day_muted">Выхадны, без званкоў</string>
     <string name="day_empty">У гэты дзень званкоў няма</string>
-    <string name="day_add_correction">Карэкцыя</string>
-    <string name="day_add_holiday">Выхадны</string>
+    <string name="day_add_correction">Новая карэкцыя</string>
+    <string name="day_add_holiday">Новы выхадны</string>
+    <string name="day_packs_title">Пачкі ў гэты дзень</string>
+    <string name="day_packs_hint">Адзначце пачку, каб дадаць у яе гэтую дату як асобную.</string>
+    <string name="day_pack_by_range">Дзейнічае па дыяпазоне дат</string>
+    <string name="day_pack_by_date">Дата дададзена</string>
+    <string name="day_pack_always">Цяпер дзейнічае заўсёды; з датай — толькі ў адзначаныя дні</string>
+    <string name="day_pack_full">Дасягнуты ліміт дат (%1$d)</string>
+    <string name="day_pack_no_modules">Няма модуляў на %1$s — у гэты дзень пачка нічога не зменіць</string>
     <string name="calendar_hint">Націсніце на дзень, каб убачыць яго званкі</string>
     <string name="agenda_pre">папяр. %1$s</string>
 

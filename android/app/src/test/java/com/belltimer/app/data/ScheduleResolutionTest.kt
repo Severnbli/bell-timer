@@ -229,4 +229,21 @@ class ScheduleResolutionTest {
             assertTrue(template.builtIn)
         }
     }
+
+    @Test
+    fun addingAndRemovingSingleDates() {
+        val window = PackWindow(from = LocalDate.of(2026, 9, 1), to = LocalDate.of(2026, 9, 30))
+        val added = window.withDate(monday)
+        assertTrue(added.hasDate(monday))
+        assertTrue(added.allows(monday))
+        assertEquals(added, added.withDate(monday))
+        assertFalse(added.withoutDate(monday).allows(monday))
+        assertTrue(window.rangeCovers(LocalDate.of(2026, 9, 15)))
+        assertFalse(window.withDate(monday).rangeCovers(monday))
+
+        val yearly = PackWindow(dates = setOf(LocalDate.of(2026, 11, 4)), yearly = true)
+        val nextYear = LocalDate.of(2027, 11, 4)
+        assertTrue(yearly.hasDate(nextYear))
+        assertTrue(yearly.withoutDate(nextYear).dates.isEmpty())
+    }
 }
