@@ -15,7 +15,7 @@ scripts/build-firmware.sh            arduino-cli build helper
 scripts/flash-firmware.sh            build, upload, then reset app_config.h
 scripts/api-test.sh                  curl test for every HTTP endpoint
 flash-firmware.sh                    convenience wrapper for the flash script
-docs/firmware-api-v4.md              schedule/API contract (v4 packs)
+docs/firmware-api-v5.md              schedule/API contract (v5 modules)
 CHANGELOG.md                         release notes
 .env.example                         template for the firmware configuration
 README.md
@@ -194,23 +194,30 @@ phone); add a release keystore if you need a Play-style signed build.
 2. Join that network on the phone. It has no internet access; Android may warn
    about this and may prefer mobile data. The app binds its HTTP sockets to the
    Wi-Fi network with `Network.socketFactory`, so the device is still reachable.
-3. Open the app. When the RTC is missing or the device clock is not set, the
-   control screen offers a "Синхронизировать время" button that sets the device
-   time from the phone.
-4. Review or edit the schedule. It is organised into **packs** (`пачки`) shown
-   top to bottom. A **base** pack adds its entries; a **correction** cancels the
-   base packs above it on the days it has entries, then adds its own. Use the
-   arrows on a pack row to change the order, the switch to enable or disable it,
-   and the pack editor to set a name, a date range, individual dates or a yearly
-   repeat. Every entry has its own weekdays, an optional `pair` time and a label.
-   Each pack holds up to 16 entries and has a quick "Очистить" action.
-   "Собрать по урокам" builds entries from a per-lesson table with individual
-   breaks, and the schedule tab can import and export the whole document as
-   JSON. Nothing is sent to the device until the single "Отправить" bar is
-   used, and the app then re-reads the schedule to verify the bell count.
-   The ring duration lives on the Settings screen only.
-5. Choose **Авто** to follow the schedule, or **Вручную** to disable the schedule;
-   manual ringing always works.
+3. Open the app. It has three tabs: **Сейчас**, **Расписание** and
+   **Настройки**.
+4. **Сейчас** shows the device clock and how far it is from the phone. The
+   "Синхронизировать с телефоном" button sets the device time from the phone
+   at any moment; with "Автосинхронизация" (Settings, on by default) the app
+   also does it by itself when the device time is unset or off by more than a
+   minute. Below are the running lesson with its progress, the next bell, the
+   big ring button, the Авто/Вручную switch and today's bells.
+5. **Расписание** shows a week strip (tap the month for a full calendar), the
+   resolved bells of the selected day and the list of **packs** (`пачки`). A
+   pack holds **modules**:
+   * **Урок** – rings at the start and at the end, optionally with a warning
+     bell N minutes before the start;
+   * **Звонок** – one bell;
+   * **Серия** – a bell every N minutes between two times.
+   "Сетка уроков" creates a whole day of lessons with breaks and a long break
+   at once. A **base** pack adds its bells; a **correction** replaces the base
+   packs above it on its dates; a **Выходной** (muted correction) cancels them.
+   Packs can be limited to a date range, individual dates and a yearly repeat.
+   Nothing is sent to the device until "Отправить" in the bottom bar; the app
+   then re-reads the schedule. Import/export (JSON) and the global "Период
+   работы" live in the schedule menu.
+6. **Настройки**: ring duration (used for every bell), automatic time sync,
+   device address and token.
 
 ## Firmware configuration (.env)
 
@@ -270,23 +277,26 @@ curl -s http://192.168.4.1/status
 
 ```json
 {
-  "time": "2026-10-22T12:36:46",
+  "time": "2026-10-23T09:03:41",
   "rtc_ok": true,
   "mode": "auto",
   "ringing": false,
   "ring_left": 0,
   "ring_default": 5,
-  "entries": 12,
-  "groups": 1,
-  "exceptions": 0,
+  "modules": 9,
+  "packs": 3,
+  "synced": "2026-10-20T07:55:02",
+  "today_bells": 14,
+  "next": {"date": "2026-10-23", "time": "09:15", "label": "1 урок", "type": "lesson", "role": "end"},
   "errors": [],
-  "fw": "1.1.0"
+  "fw": "2.0.0",
+  "api": 5
 }
 ```
 
-`time` is `null` when the RTC is missing or the time is not valid. `entries` is
-the total number of bells across all groups; `groups` and `exceptions` are the
-counts of the schedule groups and date exceptions.
+`time` is `null` when the RTC is missing or the time is not valid. `next` is
+the next bell resolved by the device (or `null`), `synced` the time of the last
+`POST /time`.
 
 ### Ring and stop
 
@@ -329,98 +339,37 @@ curl -s -X POST http://192.168.4.1/time \
   -d "{\"datetime\":\"$(date +%Y-%m-%dT%H:%M:%S)\"}"
 ```
 
-The value is the phone's local time. The minute in which the time was set is
+The value is the phone's local time; the device also remembers it as the
+last sync time (`synced` in `/status`). The minute in which the time was set is
 never used to ring a bell. Returns 503 `rtc_not_found` if the DS3231 does not
-respond.
+respond. The built-in HTML page has a button that syncs from the browser clock.
 
 ### Schedule
 
-A schedule is an ordered list of **packs** (`пачки`). A **base** pack adds its
-entries; a **correction** cancels the entries of every base pack above it and
-adds its own. Packs can be enabled/disabled, limited by a date range or
-individual dates, and repeated every year. Each entry has a time, weekdays, an
-optional second time (`pair`) and a label. The ring duration is a device setting,
-not an entry field. The complete contract, evaluation rules and migration notes
-live in [docs/firmware-api-v4.md](docs/firmware-api-v4.md).
+A schedule is an ordered list of **packs** (`пачки`); a pack holds
+**modules**: `bell` (one bell), `lesson` (start and end bell, optional warning
+bell) and `series` (a bell every N minutes). A **base** pack adds its bells; a
+**correction** cancels the base packs above it and adds its own; a correction
+with `"mute": true` is a holiday. The ring duration is a device setting, not a
+module field. The complete contract, evaluation rules and the v4 migration are
+in [docs/firmware-api-v5.md](docs/firmware-api-v5.md).
 
 ```bash
 curl -s http://192.168.4.1/schedule
-```
-
-```json
-{
-  "version": 4,
-  "max_entries": 192,
-  "max_packs": 12,
-  "max_pack_entries": 16,
-  "max_pack_dates": 24,
-  "auto": { "start": "2026-09-01", "stop": "2027-05-31" },
-  "packs": [
-    {
-      "id": 1,
-      "name": "Будни",
-      "kind": "base",
-      "enabled": true,
-      "from": "2026-09-01",
-      "to": "2027-05-31",
-      "entries": [
-        { "time": "08:30", "pair": "09:15", "days": [1, 2, 3, 4, 5], "label": "1 урок" }
-      ]
-    },
-    {
-      "id": 2,
-      "name": "Коррекция на 7 ноября",
-      "kind": "correction",
-      "yearly": true,
-      "dates": ["2026-11-07"],
-      "entries": [ { "time": "10:00", "days": [6], "label": "Суббота" } ]
-    }
-  ]
-}
-```
-
-Days are ISO weekdays: `1` = Monday, `7` = Sunday. `duration` is 1–60 seconds
-and defaults to the device's `ring_default`. Labels are UTF-8 and truncated to
-32 bytes at a code-point boundary.
-
-- `auto.start` / `auto.stop` are optional global dates. Scheduled bells fire
-  only inside the range; an omitted date means "no limit". Manual ringing is not
-  affected.
-- Packs are evaluated top to bottom. A base pack adds its entries. A correction
-  that has entries for today first cancels all base bells collected above it,
-  then adds its own. Base packs below a correction still ring.
-- `from`/`to` form an inclusive date range; `dates` lists individual dates. A
-  pack applies when either rule matches. `yearly` compares month and day, so a
-  range may wrap over New Year.
-- `pair` adds a second time with the same weekdays and label.
-- Two bells on the same `HH:MM` ring once, for the current `ring_default`.
-- v1 flat `entries`, v2 `groups`/`exceptions` and v3
-  `groups`/`overrides` are still accepted and migrated to version 4 on the next
-  save.
-- Limits: 12 packs, 16 entries per pack, 24 individual dates per pack, 192
-  entries in total. The app shows these limits and refuses to save more.
-
-Replace the whole schedule:
-
-```bash
 curl -s -X POST http://192.168.4.1/schedule \
   -H 'Content-Type: application/json' \
-  -d '{"version":4,"packs":[{"id":1,"name":"Будни","kind":"base",
-       "entries":[{"time":"08:30","pair":"09:15","days":[1,2,3,4,5],"label":"1 урок"}]}],
-       "auto":{"start":"2026-09-01","stop":"2027-05-31"}}'
+  -d '{"version":5,"packs":[{"id":1,"name":"Будни","modules":[
+       {"type":"lesson","time":"08:30","length":45,"pre":2,"days":[1,2,3,4,5],"label":"1 урок"},
+       {"type":"bell","time":"12:30","days":[1,2,3,4,5],"label":"Обед"}]}]}'
+curl -s 'http://192.168.4.1/schedule/day?date=2026-11-02'
 ```
 
-What rings on a specific date (resolved on the device):
-
-```bash
-curl -s 'http://192.168.4.1/schedule/day?date=2026-11-07'
-```
-
-The whole payload is validated before anything is written. Invalid data returns
-400 and leaves the old schedule untouched. A flash write failure returns 500
-`storage_error`. Bodies over 32 KiB are rejected before parsing. A bell fires
-only at second 0; the minute in which the device booted or the time was set is
-skipped, and missed bells are not replayed.
+Limits: 6 packs, 32 modules per pack, 24 individual dates per pack, 192
+modules in total. The whole payload is validated before anything is written;
+invalid data returns 400 and leaves the old schedule untouched. A bell fires
+at the start of its minute (within a 5 s grace period); the minute in which the
+device booted or the time was set is skipped, and missed bells are not
+replayed.
 
 ### Settings
 
@@ -450,12 +399,11 @@ status, has ring/stop/mode buttons and an X-Token input.
 | `invalid_sec` | 400 | Ring duration is not 1–60 |
 | `invalid_mode` | 400 | Mode is not `auto`/`manual` |
 | `invalid_datetime` | 400 | Bad date/time or year outside 2024–2099 |
-| `invalid_schedule` | 400 | Any invalid schedule field, duplicate pack id, `to` before `from` on a non-yearly pack, `mute` on a base pack, or `auto.stop` before `auto.start` |
-| `too_many_entries` | 400 | More than 192 entries in total, or a body larger than 32 KiB |
-| `too_many_packs` | 400 | More than 12 packs |
-| `too_many_pack_entries` | 400 | More than 16 entries in one pack |
+| `invalid_schedule` | 400 | Any invalid schedule field or module, duplicate pack id, `to` before `from` on a non-yearly pack, `mute` on a base pack, or `auto.stop` before `auto.start` |
+| `too_many_modules` | 400 | More than 192 modules in total, or a body larger than 32 KiB |
+| `too_many_packs` | 400 | More than 6 packs |
+| `too_many_pack_modules` | 400 | More than 32 modules in one pack |
 | `too_many_pack_dates` | 400 | More than 24 individual dates in one pack |
-| `too_many_groups`, `too_many_overrides`, `too_many_exceptions` | 400 | Kept for clients that still send v1/v2/v3 documents |
 | `invalid_date` | 400 | `/schedule/day` with a missing or invalid `date` |
 | `invalid_ring_default` | 400 | Default duration is not 1–60 |
 | `not_found` | 404 | Unknown path |
@@ -499,8 +447,8 @@ X_TOKEN=secret scripts/api-test.sh http://192.168.4.1
 ```
 
 The script exercises every endpoint, checks status codes, CORS, UTF-8 labels,
-default days, legacy migration, packs and corrections, `/schedule/day`, the
-limits and 400/503 error paths, and 404 handling. It saves the current schedule,
+default days, v4 migration, all module types, corrections and holidays,
+`/schedule/day`, the limits and 400/503 error paths, and 404 handling. It saves the current schedule,
 mode and `ring_default` and restores them on exit.
 
 ## Testing checklist
@@ -508,16 +456,17 @@ mode and `ring_default` and restores them on exit.
 1. `scripts/build-firmware.sh` succeeds and prints flash/RAM usage.
 2. The serial monitor prints no crash/reboot loop after power-up.
 3. The BellTimer SSID appears; a phone gets an address in `192.168.4.0/24`.
-4. `curl http://192.168.4.1/status` returns JSON with `"fw":"1.3.0"` and
-   `"api":4`.
+4. `curl http://192.168.4.1/status` returns JSON with `"fw":"2.0.0"` and
+   `"api":5`.
 5. LED blinks green 1 Hz; disconnecting the RTC shows a fast red blink and
    `rtc_not_found`.
-6. Set the time from the app; `rtc_ok` becomes `true`, `time_not_set` clears.
+6. Press "Синхронизировать с телефоном"; `time_not_set` clears, the clock
+   card shows "Совпадает со временем телефона" and `synced` is set.
 7. Ring for 3 s and press Stop: relay clicks on/off and the LED is steady green
    while ringing.
-8. Save an entry one minute in the future; at second 0 the relay clicks once.
-   Enable its `pair` and check that both times ring with the same duration.
-9. Place a correction below a base pack with an entry for today; check that
+8. Add a lesson starting one minute in the future with a length of 2 minutes;
+   the relay clicks at the start and at the end.
+9. Place a correction below a base pack with a module for today; check that
    `GET /schedule/day?date=<today>` drops the base bells. Add a base pack below
    the correction and check that its bells survive.
 10. Switch to `manual`; the schedule no longer fires, manual ring still works.
@@ -528,8 +477,8 @@ mode and `ring_default` and restores them on exit.
 14. Disable Wi-Fi: the app shows an offline indicator and a Russian error.
 15. Send a malformed schedule via curl: HTTP 400 and the device keeps the old
     schedule.
-16. With an older firmware (`api` < 4), the app refuses to send a non-empty
-    schedule and shows "Нужно обновить прошивку устройства".
+16. With an older firmware (`api` < 5), the app shows a banner and refuses to
+    send the schedule.
 
 ## Implementation notes and assumptions
 
@@ -544,15 +493,15 @@ mode and `ring_default` and restores them on exit.
 - Packs have their own date rules, so nothing is pruned by age; a pack with a
   past range simply stops applying.
 - The schedule is resolved by `collectDayBells()` on the device and by
-  `BellSchedule.bellsFor(date)` in the app; both implement the same rules from
-  [docs/firmware-api-v4.md](docs/firmware-api-v4.md).
+  `BellSchedule.resolveDay(date)` in the app; both implement the same rules from
+  [docs/firmware-api-v5.md](docs/firmware-api-v5.md).
 - The app uses cleartext HTTP only for `192.168.4.1`
   (`res/xml/network_security_config.xml`). If the base URL is changed to a
   different cleartext host, add that host to the network security config.
 - The Android app binds HTTP calls to the Wi-Fi transport. This avoids mobile
   data being used when the BellTimer network has no internet access.
-- The app's default ring duration is stored locally and also sent to the device
-  as `ring_default`.
+- The ring duration is stored locally and sent to the device as
+  `ring_default`; it applies to every scheduled and manual bell.
 - HTTP is unencrypted and the AP password is a compile-time constant. This is a
   closed, local-only device; do not expose it to an untrusted network. Set
   `API_TOKEN` for a small amount of protection.

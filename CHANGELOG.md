@@ -1,5 +1,45 @@
 # Changelog
 
+## Unreleased — schedule version 5 (modules), firmware 2.0.0
+
+### Schema: v4 → v5 (firmware and app)
+
+* Packs hold **modules** instead of raw entries: `bell` (one bell), `lesson`
+  (start and end bell, optional warning bell `pre` minutes before) and `series`
+  (a bell every `every` minutes from `time` to `until`).
+* A correction with `"mute": true` is a first-class **holiday**: it cancels the
+  base packs above it on its dates.
+* Limits: 6 packs, 32 modules per pack, 192 modules, 24 dates per pack. New
+  error codes `too_many_pack_modules` and `too_many_modules`.
+* v4 documents are migrated (an entry with a `pair` becomes a lesson); v1–v3
+  are no longer accepted.
+
+### Firmware 2.0.0 (`api: 5`)
+
+* A day is resolved into a per-minute map, so overlapping bells merge for free
+  and `/schedule/day` reports the module type and role of each bell.
+* `/status` reports the `next` bell, `today_bells` and `synced` (the last
+  `POST /time`, stored in flash).
+* A bell still fires within 5 s of its minute if the loop was busy at second 0;
+  a scheduled bell extends a shorter manual ring instead of being skipped.
+* The built-in HTML page was redesigned and can sync the time from the browser.
+
+### App
+
+* New look: warm "brass and ink" palette (light and dark), bottom navigation
+  with **Сейчас / Расписание / Настройки**.
+* **Сейчас**: device clock with live seconds, drift against the phone, a
+  "Синхронизировать с телефоном" button (aligned to the phone's second), the
+  running lesson with a progress bar, the next bell from the device, a large
+  ring button, mode switch and today's bells.
+* **Расписание**: week strip with a month calendar, colour-coded day kinds,
+  the resolved agenda of the selected day and pack cards with module counts.
+* **Pack editor**: kind, holiday switch, validity window, module cards, a
+  module sheet per type with a live preview of the bells, "Сетка уроков" with
+  a long break, shift-all and duplicate.
+* Automatic time sync can be turned off in the settings.
+
+
 ## Unreleased — schedule version 4 (packs)
 
 ### Schema: v3 → v4 (firmware and app)
