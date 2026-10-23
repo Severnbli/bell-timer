@@ -223,9 +223,11 @@ phone); add a release keystore if you need a Play-style signed build.
    Nothing is sent to the device until "Отправить" in the bottom bar; the app
    then re-reads the schedule. Import/export (JSON) and the global "Период
    работы" live in the schedule menu.
-6. **Настройки**: ring duration (1–10 s on the slider, or any value up to
-   60 s via "Своё значение"), automatic time sync, device address, token and
-   a factory reset of the device. Back from Расписание or Настройки returns to
+6. **Настройки**: app language (system, Русский, Беларуская, English),
+   ring duration (1–10 s on the slider, or any value up to
+   60 s via "Своё значение"), automatic time sync, device address, the token the app
+   sends, the device's access point name, Wi-Fi password and API token, and a
+   factory reset of the device. Back from Расписание or Настройки returns to
    Сейчас.
 
 ## Firmware configuration (.env)
@@ -400,6 +402,23 @@ Deletes the schedule and the settings: empty schedule, `auto` mode,
 `ring_default` 5. The DS3231 clock keeps its time. The app offers the same
 action at the bottom of the Settings tab.
 
+### Access point and token
+
+```bash
+curl -s http://192.168.4.1/network
+curl -s -X POST http://192.168.4.1/network \
+  -H 'Content-Type: application/json' \
+  -d '{"ssid":"School-Bell","password":"new-secret","token":"abc123"}'
+```
+
+The values from `.env` are only the defaults: the access point name, its
+password and the API token can be changed at run time, from the app's
+Settings tab or with `POST /network`. They are stored in `/network.json` and
+survive reboots. A name or password change restarts the access point 1.5 s
+after the answer, so the phone has to join the new network. A factory reset
+with "Также сбросить Wi-Fi и токен" (`{"network": true}`) returns to the
+`.env` defaults.
+
 ### HTML test page
 
 ```bash
@@ -521,6 +540,7 @@ mode and `ring_default` and restores them on exit.
   data being used when the BellTimer network has no internet access.
 - The ring duration is stored locally and sent to the device as
   `ring_default`; it applies to every scheduled and manual bell.
-- HTTP is unencrypted and the AP password is a compile-time constant. This is a
-  closed, local-only device; do not expose it to an untrusted network. Set
-  `API_TOKEN` for a small amount of protection.
+- HTTP is unencrypted, so the Wi-Fi password and the token travel in clear
+  text inside the access point's own network when they are changed. This is a
+  closed, local-only device; do not expose it to an untrusted network. Set an
+  API token for a small amount of protection.

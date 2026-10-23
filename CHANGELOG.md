@@ -23,6 +23,11 @@
 * A bell still fires within 5 s of its minute if the loop was busy at second 0;
   a scheduled bell extends a shorter manual ring instead of being skipped.
 * While the bell rings the LED blinks green at 5 Hz instead of staying lit.
+* The access point name, its password and the API token can be changed at run
+  time with `GET`/`POST /network` and are stored in `/network.json`; `.env`
+  only provides the defaults. `POST /reset {"network": true}` restores them.
+* Fixed: the `X-Token` header was ignored because the web server did not
+  collect it; only `?token=` worked.
 * `POST /reset` deletes the schedule and settings (factory reset).
 * The built-in HTML page was redesigned and can sync the time from the browser.
 
@@ -46,6 +51,10 @@
   for its options, drag packs to reorder. Pack kinds are named "Основное" and
   "Коррекция".
 * Back from the Schedule or Settings tab returns to the main tab.
+* English and Belarusian translations, with a language picker in the settings
+  (it also follows the per-app language of Android 13+).
+* Settings card to change the device's access point name, Wi-Fi password and
+  API token; the app switches to a new token by itself.
 * Lesson grid templates: each break has its own length; built-in templates
   can be copied into editable own templates, a pack's lessons can be saved as
   a template, and applying a template updates a pack's existing grid.
