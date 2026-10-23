@@ -360,7 +360,7 @@
     <string name="settings_invalid_url">Няправільны адрас прылады</string>
     <string name="settings_invalid_duration">Працягласць павінна быць ад 1 да 60 с</string>
     <string name="settings_saved">Налады захаваны</string>
-    <string name="settings_saved_local">Захавана ў праграме, але прылада недаступная</string>
+    <string name="settings_saved_local">Налады праграмы захаваны, але прылада недаступная: працягласць званка на ёй не змянілася</string>
 
     <!-- Problems found before sending -->
     <string name="issue_auto_window">Дата заканчэння раней за дату пачатку</string>

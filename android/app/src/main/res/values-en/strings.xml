@@ -352,7 +352,7 @@
     <string name="settings_invalid_url">Invalid device address</string>
     <string name="settings_invalid_duration">The duration must be 1 to 60 s</string>
     <string name="settings_saved">Settings saved</string>
-    <string name="settings_saved_local">Saved in the app, but the device is unreachable</string>
+    <string name="settings_saved_local">App settings saved, but the device is unreachable: its ring duration did not change</string>
 
     <!-- Problems found before sending -->
     <string name="issue_auto_window">The end date is before the start date</string>

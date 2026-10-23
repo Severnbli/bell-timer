@@ -105,6 +105,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private var undoSnapshot: BellSchedule? = null
     private var scheduleLoadAttempted = false
     private var lastAutoSyncAt = 0L
+    private var savingSettings = false
 
     init {
         api.updateSettings(initialSettings)
@@ -163,6 +164,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private fun applyStatus(status: DeviceStatus) {
         val receivedAt = System.currentTimeMillis()
         val phoneNow = LocalDateTime.now()
+        adoptDeviceRingDefault(status.ringDefault)
         _state.update {
             it.copy(
                 connection = ConnectionState.Online,
@@ -172,6 +174,21 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 lastError = null,
             )
         }
+    }
+
+    /**
+     * The device is the authority on the ring duration: another phone, the
+     * web page or a factory reset may have changed it. Skipped while this app
+     * is saving its own value, so a poll cannot undo the user's change.
+     */
+    private fun adoptDeviceRingDefault(seconds: Int) {
+        if (savingSettings || seconds !in MIN_RING_SECONDS..MAX_RING_SECONDS) return
+        val current = _state.value.settings
+        if (current.ringDefault == seconds) return
+        val updated = current.copy(ringDefault = seconds)
+        store.save(updated)
+        api.updateSettings(updated)
+        _state.update { it.copy(settings = updated) }
     }
 
     // ----------------------------- Controls ------------------------------
@@ -459,6 +476,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         )
         store.save(updated)
         api.updateSettings(updated)
+        savingSettings = true
 
         val urlChanged = old.baseUrl != updated.baseUrl
         if (urlChanged) {
@@ -478,6 +496,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 throw e
             } catch (_: Throwable) {
                 false
+            } finally {
+                // When the device did not take the value, the next poll
+                // brings the app back in line with what actually rings.
+                savingSettings = false
             }
             refreshStatus()
             reportMessage(text(if (deviceSaved) R.string.settings_saved else R.string.settings_saved_local))
