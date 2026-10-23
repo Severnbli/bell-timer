@@ -138,8 +138,8 @@ Field notes:
 
 | Limit | Value | Constant (firmware / app) |
 | --- | --- | --- |
-| Packs | 12 | `MAX_PACKS` / `MAX_PACKS` |
-| Entries per pack | 16 | `MAX_PACK_ENTRIES` / `MAX_PACK_ENTRIES` |
+| Packs | 6 | `MAX_PACKS` / `MAX_PACKS` |
+| Entries per pack | 32 | `MAX_PACK_ENTRIES` / `MAX_PACK_ENTRIES` |
 | Individual dates per pack | 24 | `MAX_PACK_DATES` / `MAX_PACK_DATES` |
 | Entries in total | 192 | `MAX_ENTRIES` / `MAX_SCHEDULE_ENTRIES` |
 | Label | 32 UTF-8 bytes | `MAX_LABEL_BYTES` |
@@ -185,8 +185,8 @@ This mirrors `BellSchedule.bellsFor(date)` in
 * Migrated base packs are placed before all corrections so every correction
   cancels every migrated base pack on its date.
 
-Because a v4 schedule can hold only 12 packs, a legacy document with more than
-12 packs cannot be migrated completely. The device rejects such an upload with
+Because a v4 schedule can hold only 6 packs, a legacy document with more than
+6 packs cannot be migrated completely. The device rejects such an upload with
 `too_many_packs`; stored data that cannot be migrated is ignored on boot.
 
 ## Error codes
@@ -198,8 +198,8 @@ Because a v4 schedule can hold only 12 packs, a legacy document with more than
 | `invalid_schedule` | Any invalid field, duplicate pack id, invalid date range, `mute` on a base pack |
 | `invalid_json` | Body missing or not parseable |
 | `too_many_entries` | More than 192 entries in total, or a body larger than 32 KiB |
-| `too_many_packs` | More than 12 packs |
-| `too_many_pack_entries` | More than 16 entries in one pack |
+| `too_many_packs` | More than 6 packs |
+| `too_many_pack_entries` | More than 32 entries in one pack |
 | `too_many_pack_dates` | More than 24 individual dates in one pack |
 | `too_many_groups`, `too_many_overrides`, `too_many_exceptions` | Kept for clients that still send v1/v2/v3 documents |
 | `storage_error` | 500, flash write failed |

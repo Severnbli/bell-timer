@@ -57,8 +57,8 @@ const uint8_t PIN_I2C_SCL = BELLTIMER_PIN_I2C_SCL;
 // Packs can have a date range, individual dates and a yearly repeat. Auto mode
 // can still be limited to a global date range. The limits below are mirrored
 // by the Android app (data/Models.kt).
-const size_t MAX_PACKS = 12;          // ordered packs
-const size_t MAX_PACK_ENTRIES = 16;   // entries inside one pack
+const size_t MAX_PACKS = 6;           // ordered packs
+const size_t MAX_PACK_ENTRIES = 32;   // entries inside one pack
 const size_t MAX_PACK_DATES = 24;     // individual dates inside one pack
 const size_t MAX_ENTRIES = MAX_PACKS * MAX_PACK_ENTRIES;
 const size_t MAX_LABEL_BYTES = 32;    // About 10 Cyrillic characters in UTF-8.

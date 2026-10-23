@@ -13,8 +13,8 @@ const val DEFAULT_BASE_URL = "http://192.168.4.1"
 const val DEFAULT_RING_SECONDS = 5
 
 /** Firmware limits, mirrored in firmware/BellTimer/BellTimer.ino. */
-const val MAX_PACKS = 12
-const val MAX_PACK_ENTRIES = 16
+const val MAX_PACKS = 6
+const val MAX_PACK_ENTRIES = 32
 const val MAX_PACK_DATES = 24
 const val MAX_SCHEDULE_ENTRIES = MAX_PACKS * MAX_PACK_ENTRIES
 const val MAX_LABEL_BYTES = 32
