@@ -15,7 +15,7 @@ scripts/build-firmware.sh            arduino-cli build helper
 scripts/flash-firmware.sh            build, upload, then reset app_config.h
 scripts/api-test.sh                  curl test for every HTTP endpoint
 flash-firmware.sh                    convenience wrapper for the flash script
-docs/firmware-api-v3.md              schedule/API contract (v3)
+docs/firmware-api-v4.md              schedule/API contract (v4 packs)
 CHANGELOG.md                         release notes
 .env.example                         template for the firmware configuration
 README.md
@@ -197,16 +197,18 @@ phone); add a release keystore if you need a Play-style signed build.
 3. Open the app. When the RTC is missing or the device clock is not set, the
    control screen offers a "Синхронизировать время" button that sets the device
    time from the phone.
-4. Review or edit the schedule. It is organised into **schedules**: a named set
-   of bells that repeats on the weekdays it owns (for example "Будни",
-   Monday–Friday). Each weekday belongs to exactly one schedule; the week strip
-   on the schedule tab shows and changes that assignment. A **special day**
-   overrides one calendar date: no bells at all, a bell list of its own (usually
-   started from a copy of the normal day), or a few extra bells on top of it.
-   "Собрать по урокам" builds a bell list from a per-lesson table with individual
+4. Review or edit the schedule. It is organised into **packs** (`пачки`) shown
+   top to bottom. A **base** pack adds its entries; a **correction** cancels the
+   base packs above it on the days it has entries, then adds its own. Use the
+   arrows on a pack row to change the order, the switch to enable or disable it,
+   and the pack editor to set a name, a date range, individual dates or a yearly
+   repeat. Every entry has its own weekdays, an optional `pair` time and a label.
+   Each pack holds up to 16 entries and has a quick "Очистить" action.
+   "Собрать по урокам" builds entries from a per-lesson table with individual
    breaks, and the schedule tab can import and export the whole document as
    JSON. Nothing is sent to the device until the single "Отправить" bar is
    used, and the app then re-reads the schedule to verify the bell count.
+   The ring duration lives on the Settings screen only.
 5. Choose **Авто** to follow the schedule, or **Вручную** to disable the schedule;
    manual ringing always works.
 
@@ -333,10 +335,13 @@ respond.
 
 ### Schedule
 
-A schedule is a list of **schedules** (named bell lists with weekday masks) plus
-per-date **overrides**; auto mode can be limited to a **start/stop date range**.
-The complete contract, evaluation rules and migration notes live in
-[docs/firmware-api-v3.md](docs/firmware-api-v3.md).
+A schedule is an ordered list of **packs** (`пачки`). A **base** pack adds its
+entries; a **correction** cancels the entries of every base pack above it and
+adds its own. Packs can be enabled/disabled, limited by a date range or
+individual dates, and repeated every year. Each entry has a time, weekdays, an
+optional second time (`pair`) and a label. The ring duration is a device setting,
+not an entry field. The complete contract, evaluation rules and migration notes
+live in [docs/firmware-api-v4.md](docs/firmware-api-v4.md).
 
 ```bash
 curl -s http://192.168.4.1/schedule
@@ -344,29 +349,33 @@ curl -s http://192.168.4.1/schedule
 
 ```json
 {
-  "version": 3,
-  "max_entries": 256,
-  "max_groups": 12,
-  "max_overrides": 90,
+  "version": 4,
+  "max_entries": 192,
+  "max_packs": 12,
+  "max_pack_entries": 16,
+  "max_pack_dates": 24,
   "auto": { "start": "2026-09-01", "stop": "2027-05-31" },
-  "groups": [
+  "packs": [
     {
       "id": 1,
       "name": "Будни",
-      "days": [1, 2, 3, 4, 5],
+      "kind": "base",
+      "enabled": true,
+      "from": "2026-09-01",
+      "to": "2027-05-31",
       "entries": [
-        { "time": "08:30", "days": [1, 2, 3, 4, 5], "duration": 5, "label": "1 урок" }
+        { "time": "08:30", "pair": "09:15", "days": [1, 2, 3, 4, 5], "label": "1 урок" }
       ]
+    },
+    {
+      "id": 2,
+      "name": "Коррекция на 7 ноября",
+      "kind": "correction",
+      "yearly": true,
+      "dates": ["2026-11-07"],
+      "entries": [ { "time": "10:00", "days": [6], "label": "Суббота" } ]
     }
-  ],
-  "overrides": [
-    { "date": "2026-11-04", "mode": "mute" },
-    { "date": "2026-11-07", "mode": "replace", "based_on": 1,
-      "entries": [ { "time": "10:00", "duration": 5, "label": "Суббота" } ] },
-    { "date": "2026-11-13", "mode": "add",
-      "entries": [ { "time": "12:30", "duration": 10, "label": "Доп. звонок" } ] }
-  ],
-  "entries": [ ... ]
+  ]
 }
 ```
 
@@ -374,30 +383,30 @@ Days are ISO weekdays: `1` = Monday, `7` = Sunday. `duration` is 1–60 seconds
 and defaults to the device's `ring_default`. Labels are UTF-8 and truncated to
 32 bytes at a code-point boundary.
 
-- `auto.start` / `auto.stop` are optional dates. Scheduled bells fire only
-  inside the range; an omitted date means "no limit". Manual ringing is not
+- `auto.start` / `auto.stop` are optional global dates. Scheduled bells fire
+  only inside the range; an omitted date means "no limit". Manual ringing is not
   affected.
-- `overrides` replace the old `exceptions`. `mode` is `mute`, `replace` (the
-  override's entries are the whole bell list of that date) or `add` (extra bells
-  on top of the weekly schedule). `based_on` is metadata and never evaluated. A
-  date may appear only once.
-- In auto mode the first group (in document order) whose `days` contain today is
-  used. An entry with a narrower `days` list only rings on the intersection of
-  the entry and group days.
-- Two bells on the same `HH:MM` ring once with the longer duration.
-- `entries` is a flat read-only view of the weekly bells, kept for older clients.
-  A v1 document with only `{"entries":[...]}` and a v2 document with
-  `exceptions` are still accepted and migrated to version 3 on the next save.
-- Limits: 256 bells in total (weekly plus overrides), 12 schedules, 90
-  overrides. The app shows these limits and refuses to save more.
+- Packs are evaluated top to bottom. A base pack adds its entries. A correction
+  that has entries for today first cancels all base bells collected above it,
+  then adds its own. Base packs below a correction still ring.
+- `from`/`to` form an inclusive date range; `dates` lists individual dates. A
+  pack applies when either rule matches. `yearly` compares month and day, so a
+  range may wrap over New Year.
+- `pair` adds a second time with the same weekdays and label.
+- Two bells on the same `HH:MM` ring once, for the current `ring_default`.
+- v1 flat `entries`, v2 `groups`/`exceptions` and v3
+  `groups`/`overrides` are still accepted and migrated to version 4 on the next
+  save.
+- Limits: 12 packs, 16 entries per pack, 24 individual dates per pack, 192
+  entries in total. The app shows these limits and refuses to save more.
 
 Replace the whole schedule:
 
 ```bash
 curl -s -X POST http://192.168.4.1/schedule \
   -H 'Content-Type: application/json' \
-  -d '{"version":3,"groups":[{"id":1,"name":"Будни","days":[1,2,3,4,5],
-       "entries":[{"time":"08:30","duration":5,"label":"1 урок"}]}],
+  -d '{"version":4,"packs":[{"id":1,"name":"Будни","kind":"base",
+       "entries":[{"time":"08:30","pair":"09:15","days":[1,2,3,4,5],"label":"1 урок"}]}],
        "auto":{"start":"2026-09-01","stop":"2027-05-31"}}'
 ```
 
@@ -409,7 +418,7 @@ curl -s 'http://192.168.4.1/schedule/day?date=2026-11-07'
 
 The whole payload is validated before anything is written. Invalid data returns
 400 and leaves the old schedule untouched. A flash write failure returns 500
-`storage_error`. Bodies over 16 KiB are rejected before parsing. A bell fires
+`storage_error`. Bodies over 32 KiB are rejected before parsing. A bell fires
 only at second 0; the minute in which the device booted or the time was set is
 skipped, and missed bells are not replayed.
 
@@ -441,11 +450,12 @@ status, has ring/stop/mode buttons and an X-Token input.
 | `invalid_sec` | 400 | Ring duration is not 1–60 |
 | `invalid_mode` | 400 | Mode is not `auto`/`manual` |
 | `invalid_datetime` | 400 | Bad date/time or year outside 2024–2099 |
-| `invalid_schedule` | 400 | Any invalid schedule field, duplicate group id/override date, empty group `days`, both `overrides` and `exceptions`, or `auto.stop` before `auto.start` |
-| `too_many_entries` | 400 | More than 256 bells in total, or a body larger than 16 KiB |
-| `too_many_groups` | 400 | More than 12 groups |
-| `too_many_overrides` | 400 | More than 90 per-date overrides |
-| `too_many_exceptions` | 400 | A v2 `exceptions` array larger than 90 (old clients) |
+| `invalid_schedule` | 400 | Any invalid schedule field, duplicate pack id, `to` before `from` on a non-yearly pack, `mute` on a base pack, or `auto.stop` before `auto.start` |
+| `too_many_entries` | 400 | More than 192 entries in total, or a body larger than 32 KiB |
+| `too_many_packs` | 400 | More than 12 packs |
+| `too_many_pack_entries` | 400 | More than 16 entries in one pack |
+| `too_many_pack_dates` | 400 | More than 24 individual dates in one pack |
+| `too_many_groups`, `too_many_overrides`, `too_many_exceptions` | 400 | Kept for clients that still send v1/v2/v3 documents |
 | `invalid_date` | 400 | `/schedule/day` with a missing or invalid `date` |
 | `invalid_ring_default` | 400 | Default duration is not 1–60 |
 | `not_found` | 404 | Unknown path |
@@ -489,36 +499,37 @@ X_TOKEN=secret scripts/api-test.sh http://192.168.4.1
 ```
 
 The script exercises every endpoint, checks status codes, CORS, UTF-8 labels,
-default days, version 2 to 3 migration, overrides, `/schedule/day`, the limits
-and 400/503 error paths, and 404 handling. It saves the current schedule, mode
-and `ring_default` and restores them on exit.
+default days, legacy migration, packs and corrections, `/schedule/day`, the
+limits and 400/503 error paths, and 404 handling. It saves the current schedule,
+mode and `ring_default` and restores them on exit.
 
 ## Testing checklist
 
 1. `scripts/build-firmware.sh` succeeds and prints flash/RAM usage.
 2. The serial monitor prints no crash/reboot loop after power-up.
 3. The BellTimer SSID appears; a phone gets an address in `192.168.4.0/24`.
-4. `curl http://192.168.4.1/status` returns JSON with `"fw":"1.2.0"` and
-   `"api":3`.
+4. `curl http://192.168.4.1/status` returns JSON with `"fw":"1.3.0"` and
+   `"api":4`.
 5. LED blinks green 1 Hz; disconnecting the RTC shows a fast red blink and
    `rtc_not_found`.
 6. Set the time from the app; `rtc_ok` becomes `true`, `time_not_set` clears.
 7. Ring for 3 s and press Stop: relay clicks on/off and the LED is steady green
    while ringing.
-8. Save a schedule entry one minute in the future; at second 0 the relay clicks
-   once. Check a same-minute pair rings for the longer duration.
-9. Create a special day for today with `mute`, `replace` and `add` variants and
-   check `GET /schedule/day?date=<today>`; only `add` keeps the weekly bells.
+8. Save an entry one minute in the future; at second 0 the relay clicks once.
+   Enable its `pair` and check that both times ring with the same duration.
+9. Place a correction below a base pack with an entry for today; check that
+   `GET /schedule/day?date=<today>` drops the base bells. Add a base pack below
+   the correction and check that its bells survive.
 10. Switch to `manual`; the schedule no longer fires, manual ring still works.
-10. Power-cycle the device: schedule, overrides, mode and `ring_default` survive.
-11. Boot during a scheduled minute: no bell for that minute.
-12. Rotate the phone and toggle dark mode: screen state and unsaved schedule
+11. Power-cycle the device: schedule, packs, mode and `ring_default` survive.
+12. Boot during a scheduled minute: no bell for that minute.
+13. Rotate the phone and toggle dark mode: screen state and unsaved schedule
     changes stay intact.
-13. Disable Wi-Fi: the app shows an offline indicator and a Russian error.
-14. Send a malformed schedule via curl: HTTP 400 and the device keeps the old
+14. Disable Wi-Fi: the app shows an offline indicator and a Russian error.
+15. Send a malformed schedule via curl: HTTP 400 and the device keeps the old
     schedule.
-15. With an older firmware (`api` < 3), the app disables "Особые дни" with
-    "Нужно обновить прошивку устройства" and still edits weekly schedules.
+16. With an older firmware (`api` < 4), the app refuses to send a non-empty
+    schedule and shows "Нужно обновить прошивку устройства".
 
 ## Implementation notes and assumptions
 
@@ -530,11 +541,11 @@ and `ring_default` and restores them on exit.
   detection, AP startup and LittleFS mounting are retried periodically.
 - The schedule is written with a temporary file and rename, so a power loss
   during save does not leave a half-written schedule.
-- Overrides older than 30 days are dropped on save when the clock is valid, so
-  the flash file cannot grow without bound.
+- Packs have their own date rules, so nothing is pruned by age; a pack with a
+  past range simply stops applying.
 - The schedule is resolved by `collectDayBells()` on the device and by
   `BellSchedule.bellsFor(date)` in the app; both implement the same rules from
-  [docs/firmware-api-v3.md](docs/firmware-api-v3.md).
+  [docs/firmware-api-v4.md](docs/firmware-api-v4.md).
 - The app uses cleartext HTTP only for `192.168.4.1`
   (`res/xml/network_security_config.xml`). If the base URL is changed to a
   different cleartext host, add that host to the network security config.

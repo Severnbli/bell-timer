@@ -121,15 +121,15 @@ code="$(request GET /status "" "${WORK_DIR}/status.json")"
 expect_code 200 "${code}" "GET /status" "${WORK_DIR}/status.json"
 expect_contains "${WORK_DIR}/status.json" '"rtc_ok"' "status contains rtc_ok"
 expect_contains "${WORK_DIR}/status.json" '"errors"' "status contains errors"
-expect_contains "${WORK_DIR}/status.json" '"fw":"1.2.0"' "status contains firmware version"
-expect_contains "${WORK_DIR}/status.json" '"api":3' "status reports API level 3"
+expect_contains "${WORK_DIR}/status.json" '"fw":"1.3.0"' "status contains firmware version"
+expect_contains "${WORK_DIR}/status.json" '"api":4' "status reports API level 4"
 
 code="$(request GET /mode "" "${WORK_DIR}/original_mode.json")"
 expect_code 200 "${code}" "GET /mode" "${WORK_DIR}/original_mode.json"
 
 code="$(request GET /schedule "" "${WORK_DIR}/original_schedule.json")"
 expect_code 200 "${code}" "GET /schedule" "${WORK_DIR}/original_schedule.json"
-expect_contains "${WORK_DIR}/original_schedule.json" '"entries"' "schedule contains entries"
+expect_contains "${WORK_DIR}/original_schedule.json" '"packs"' "schedule contains packs"
 
 code="$(request GET /settings "" "${WORK_DIR}/original_settings.json")"
 expect_code 200 "${code}" "GET /settings" "${WORK_DIR}/original_settings.json"
@@ -237,20 +237,20 @@ GROUP_SCHEDULE='{"version":2,"auto":{"start":"2026-01-10","stop":"2027-06-30"},"
 code="$(request POST /schedule "${GROUP_SCHEDULE}" "${WORK_DIR}/schedule_groups_post.json")"
 expect_code 200 "${code}" "POST /schedule with groups" \
     "${WORK_DIR}/schedule_groups_post.json"
-expect_contains "${WORK_DIR}/schedule_groups_post.json" '"groups":2' \
-    "group count is reported"
+expect_contains "${WORK_DIR}/schedule_groups_post.json" '"packs":4' \
+    "migrated pack count is reported"
 
 code="$(request GET /schedule "" "${WORK_DIR}/schedule_groups_get.json")"
 expect_code 200 "${code}" "GET /schedule with groups" \
     "${WORK_DIR}/schedule_groups_get.json"
 expect_contains "${WORK_DIR}/schedule_groups_get.json" '"name":"Будни"' \
     "group name is returned"
-expect_contains "${WORK_DIR}/schedule_groups_get.json" '"mode":"mute"' \
-    "version 2 exception is migrated to a mute override"
-expect_contains "${WORK_DIR}/schedule_groups_get.json" '"mode":"replace"' \
-    "version 2 group exception is migrated to a replace override"
-expect_contains "${WORK_DIR}/schedule_groups_get.json" '"based_on":2' \
-    "migrated override keeps its source group"
+expect_contains "${WORK_DIR}/schedule_groups_get.json" '"mute":true' \
+    "version 2 exception is migrated to a muted correction"
+expect_contains "${WORK_DIR}/schedule_groups_get.json" '"time":"09:00"' \
+    "version 2 group exception is migrated to a correction"
+expect_contains "${WORK_DIR}/schedule_groups_get.json" '"version":4' \
+    "stored schedule is returned as version 4"
 expect_contains "${WORK_DIR}/schedule_groups_get.json" '"start":"2026-01-10"' \
     "auto start date is returned"
 
@@ -258,16 +258,16 @@ V3_SCHEDULE='{"version":3,"groups":[{"id":1,"name":"Будни","days":[1,2,3,4,
 code="$(request POST /schedule "${V3_SCHEDULE}" "${WORK_DIR}/schedule_v3_post.json")"
 expect_code 200 "${code}" "POST /schedule with overrides" \
     "${WORK_DIR}/schedule_v3_post.json"
-expect_contains "${WORK_DIR}/schedule_v3_post.json" '"overrides":3' \
-    "override count is reported"
+expect_contains "${WORK_DIR}/schedule_v3_post.json" '"packs":4' \
+    "migrated pack count is reported"
 
 code="$(request GET /schedule "" "${WORK_DIR}/schedule_v3_get.json")"
 expect_code 200 "${code}" "GET /schedule after v3 save" \
     "${WORK_DIR}/schedule_v3_get.json"
-expect_contains "${WORK_DIR}/schedule_v3_get.json" '"version":3' \
-    "stored schedule is returned as version 3"
-expect_contains "${WORK_DIR}/schedule_v3_get.json" '"mode":"add"' \
-    "add override is returned"
+expect_contains "${WORK_DIR}/schedule_v3_get.json" '"version":4' \
+    "stored schedule is returned as version 4"
+expect_contains "${WORK_DIR}/schedule_v3_get.json" '"kind":"correction"' \
+    "override is migrated to a correction pack"
 
 code="$(request GET "/schedule/day?date=2027-03-06" "" "${WORK_DIR}/day_replace.json")"
 expect_code 200 "${code}" "GET /schedule/day replace" "${WORK_DIR}/day_replace.json"
@@ -317,10 +317,10 @@ for i in $(seq 1 257); do
 done
 MANY_ENTRIES+=']}'
 code="$(request POST /schedule "${MANY_ENTRIES}" "${WORK_DIR}/schedule_too_many.json")"
-expect_code 400 "${code}" "POST /schedule rejects more than 256 entries" \
+expect_code 400 "${code}" "POST /schedule rejects more than 16 entries per pack" \
     "${WORK_DIR}/schedule_too_many.json"
-expect_contains "${WORK_DIR}/schedule_too_many.json" '"error":"too_many_entries"' \
-    "too many entries error code"
+expect_contains "${WORK_DIR}/schedule_too_many.json" '"error":"too_many_pack_entries"' \
+    "too many pack entries error code"
 
 MANY_OVERRIDES='{"groups":[{"id":1,"name":"A","days":[1],"entries":[]}],"overrides":['
 override_count=0
@@ -338,10 +338,10 @@ for month in 01 02 03 04; do
 done
 MANY_OVERRIDES+=']}'
 code="$(request POST /schedule "${MANY_OVERRIDES}" "${WORK_DIR}/schedule_too_many_overrides.json")"
-expect_code 400 "${code}" "POST /schedule rejects more than 90 overrides" \
+expect_code 400 "${code}" "POST /schedule rejects more than 12 migrated packs" \
     "${WORK_DIR}/schedule_too_many_overrides.json"
 expect_contains "${WORK_DIR}/schedule_too_many_overrides.json" \
-    '"error":"too_many_overrides"' "too many overrides error code"
+    '"error":"too_many_packs"' "too many packs error code"
 
 # --- Settings -------------------------------------------------------------
 code="$(request POST /settings '{"ring_default":7}' "${WORK_DIR}/settings_post.json")"

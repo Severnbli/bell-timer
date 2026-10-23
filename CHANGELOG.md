@@ -1,5 +1,46 @@
 # Changelog
 
+## Unreleased — schedule version 4 (packs)
+
+### Schema: v3 → v4 (firmware and app)
+
+* **Packs** (`пачки`) replace `groups` + `overrides`. A pack is a named,
+  ordered bundle of entries with `kind: "base" | "correction"`, an `enabled`
+  switch, an optional `from`/`to` range, individual `dates` and a `yearly`
+  repeat flag.
+* A base pack adds its entries. A correction cancels every base pack above it
+  when it has entries for the current weekday, then adds its own. Base packs
+  below a correction still ring.
+* **Entries** now carry `time`, optional `pair`, `days` and `label`. The
+  per-entry `duration` is gone: the ring duration is the device setting edited
+  on the Settings screen only.
+* Limits: 12 packs, 16 entries per pack, 24 individual dates per pack and 192
+  entries in total.
+* New firmware (`1.3.0`, `api: 4`) migrates v1/v2/v3 documents in memory and
+  rewrites storage as v4. New error codes `too_many_packs`,
+  `too_many_pack_entries` and `too_many_pack_dates`.
+* `GET /status` returns `packs` instead of `groups`/`overrides`.
+
+### App
+
+* **Schedule tab** is now a vertical, reorderable list of packs with a
+  base/correction badge, an active/inactive status for today, an enable switch
+  and up/down arrows. The "Особые дни" tab and the day editor are removed.
+* **Pack editor**: editable name, type switch, enable switch, validity range,
+  individual dates, yearly repeat, entry list with swipe-to-delete, a quick
+  "Очистить" action, builder and move-by-N-minutes.
+* **Entry editor**: time, optional pair time, weekday chips and label. No
+  duration control.
+* The duration picker was removed from the control screen and both editors; it
+  remains only on the Settings screen.
+* Import/export and "Проверить дату" moved to the schedule overflow menu.
+* Unit tests rewritten for pack resolution, codec migration and the builder.
+
+### Docs
+
+* `docs/firmware-api-v4.md` — contract, evaluation rules, limits, migration and
+  error codes. `docs/firmware-api-v3.md` is superseded.
+
 ## Unreleased — schedule version 3
 
 ### Schema: v2 → v3 (firmware and app)
