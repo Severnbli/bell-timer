@@ -2,26 +2,36 @@ package com.belltimer.app.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
@@ -34,14 +44,24 @@ import com.belltimer.app.data.MAX_RING_SECONDS
 import com.belltimer.app.data.MIN_RING_SECONDS
 import kotlin.math.roundToInt
 
+/** The slider covers the usual durations; longer ones are typed in. */
+private const val SLIDER_MAX_SECONDS = 10
+
 @Composable
 fun SettingsScreen(state: UiState, viewModel: AppViewModel) {
     val settings = state.settings
     var baseUrl by rememberSaveable(settings.baseUrl) { mutableStateOf(settings.baseUrl) }
     var token by rememberSaveable(settings.token) { mutableStateOf(settings.token) }
-    var ring by rememberSaveable(settings.ringDefault) { mutableFloatStateOf(settings.ringDefault.toFloat()) }
     var autoSync by rememberSaveable(settings.autoSyncTime) { mutableStateOf(settings.autoSyncTime) }
-    val ringSeconds = ring.roundToInt().coerceIn(MIN_RING_SECONDS, MAX_RING_SECONDS)
+    var sliderSeconds by rememberSaveable(settings.ringDefault) {
+        mutableIntStateOf(settings.ringDefault.coerceAtMost(SLIDER_MAX_SECONDS))
+    }
+    var custom by rememberSaveable(settings.ringDefault) { mutableStateOf(settings.ringDefault > SLIDER_MAX_SECONDS) }
+    var customText by rememberSaveable(settings.ringDefault) { mutableStateOf(settings.ringDefault.toString()) }
+    var confirmReset by remember { mutableStateOf(false) }
+
+    val customSeconds = customText.toIntOrNull()?.takeIf { it in MIN_RING_SECONDS..MAX_RING_SECONDS }
+    val ringSeconds = if (custom) customSeconds else sliderSeconds
     val changed = baseUrl != settings.baseUrl || token != settings.token ||
         ringSeconds != settings.ringDefault || autoSync != settings.autoSyncTime
 
@@ -66,17 +86,48 @@ fun SettingsScreen(state: UiState, viewModel: AppViewModel) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(8.dp))
-            Text(
-                text = stringResource(R.string.seconds_value, ringSeconds),
-                style = MaterialTheme.typography.headlineMedium.merge(Tabular),
-                color = MaterialTheme.colorScheme.primary,
-            )
-            Slider(
-                value = ring,
-                onValueChange = { ring = it },
-                valueRange = MIN_RING_SECONDS.toFloat()..MAX_RING_SECONDS.toFloat(),
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = ringSeconds?.let { stringResource(R.string.seconds_value, it) } ?: "—",
+                    style = MaterialTheme.typography.headlineMedium.merge(Tabular),
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.weight(1f),
+                )
+                QuickChip(stringResource(R.string.settings_ring_custom), custom) {
+                    custom = !custom
+                    if (custom) customText = sliderSeconds.toString()
+                }
+            }
+            if (custom) {
+                OutlinedTextField(
+                    value = customText,
+                    onValueChange = { value -> customText = value.filter { it.isDigit() }.take(2) },
+                    label = { Text(stringResource(R.string.settings_ring_custom_label)) },
+                    suffix = { Text(stringResource(R.string.seconds_suffix)) },
+                    isError = customSeconds == null,
+                    supportingText = {
+                        Text(stringResource(R.string.settings_ring_custom_range, MIN_RING_SECONDS, MAX_RING_SECONDS))
+                    },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                )
+            } else {
+                Slider(
+                    value = sliderSeconds.toFloat(),
+                    onValueChange = { sliderSeconds = it.roundToInt() },
+                    valueRange = MIN_RING_SECONDS.toFloat()..SLIDER_MAX_SECONDS.toFloat(),
+                    steps = SLIDER_MAX_SECONDS - MIN_RING_SECONDS - 1,
+                )
+                Row {
+                    Caption("$MIN_RING_SECONDS", modifier = Modifier.weight(1f))
+                    Caption("$SLIDER_MAX_SECONDS")
+                }
+            }
             state.status?.let {
+                Spacer(Modifier.height(4.dp))
                 Caption(stringResource(R.string.settings_ring_device, it.ringDefault))
             }
         }
@@ -115,8 +166,8 @@ fun SettingsScreen(state: UiState, viewModel: AppViewModel) {
         }
 
         Button(
-            onClick = { viewModel.saveSettings(baseUrl, token, ringSeconds, autoSync) },
-            enabled = changed,
+            onClick = { ringSeconds?.let { viewModel.saveSettings(baseUrl, token, it, autoSync) } },
+            enabled = changed && ringSeconds != null,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(52.dp),
@@ -135,7 +186,37 @@ fun SettingsScreen(state: UiState, viewModel: AppViewModel) {
                 AboutLine(stringResource(R.string.settings_modules), it.modules.toString())
             }
         }
+
+        AppCard {
+            Text(stringResource(R.string.reset_title), style = MaterialTheme.typography.titleMedium)
+            Text(
+                stringResource(R.string.reset_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = { confirmReset = true },
+                enabled = state.online && !state.busy,
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Default.RestartAlt, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.reset_button))
+            }
+        }
         Spacer(Modifier.height(8.dp))
+    }
+
+    if (confirmReset) {
+        ConfirmDialog(
+            title = stringResource(R.string.reset_confirm_title),
+            text = stringResource(R.string.reset_confirm_text),
+            confirm = stringResource(R.string.reset_confirm),
+            onConfirm = viewModel::factoryReset,
+            onDismiss = { confirmReset = false },
+        )
     }
 }
 

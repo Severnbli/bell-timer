@@ -271,6 +271,17 @@
     <string name="settings_ring_title">Длительность звонка</string>
     <string name="settings_ring_hint">Сколько звенит каждый звонок — по расписанию и по кнопке.</string>
     <string name="settings_ring_device">Сейчас на устройстве: %1$d с</string>
+    <string name="settings_ring_custom">Своё значение</string>
+    <string name="settings_ring_custom_label">Длительность</string>
+    <string name="settings_ring_custom_range">От %1$d до %2$d с</string>
+    <string name="seconds_suffix">с</string>
+    <string name="reset_title">Сброс к заводским настройкам</string>
+    <string name="reset_hint">Удаляет на устройстве расписание, режим и длительность звонка. Часы продолжают идти.</string>
+    <string name="reset_button">Сбросить устройство</string>
+    <string name="reset_confirm_title">Сбросить устройство?</string>
+    <string name="reset_confirm_text">Всё расписание будет удалено с устройства без возможности восстановления. Сохраните его через «Экспорт», если оно ещё понадобится.</string>
+    <string name="reset_confirm">Сбросить</string>
+    <string name="reset_done">Устройство сброшено к заводским настройкам</string>
     <string name="settings_time_title">Время</string>
     <string name="settings_auto_sync">Автосинхронизация</string>
     <string name="settings_auto_sync_hint">Выставлять время с телефона, если на устройстве оно сбилось больше чем на минуту</string>

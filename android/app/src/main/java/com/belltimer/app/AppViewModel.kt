@@ -7,6 +7,7 @@ import com.belltimer.app.data.ApiClient
 import com.belltimer.app.data.ApiException
 import com.belltimer.app.data.AppSettings
 import com.belltimer.app.data.BellSchedule
+import com.belltimer.app.data.DEFAULT_RING_SECONDS
 import com.belltimer.app.data.DeviceStatus
 import com.belltimer.app.data.MAX_RING_SECONDS
 import com.belltimer.app.data.MIN_RING_SECONDS
@@ -439,6 +440,31 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             refreshStatus()
             reportMessage(text(if (deviceSaved) R.string.settings_saved else R.string.settings_saved_local))
         }
+    }
+
+    /**
+     * Wipes the schedule and the settings on the device. The app adopts the
+     * device defaults and drops any unsent edits.
+     */
+    fun factoryReset() = action {
+        val response = api.factoryReset()
+        if (!response.ok) throw ApiException.Http(500, response.error ?: "storage_error")
+        val updated = _state.value.settings.copy(ringDefault = DEFAULT_RING_SECONDS)
+        store.save(updated)
+        api.updateSettings(updated)
+        undoSnapshot = null
+        _state.update {
+            it.copy(
+                settings = updated,
+                schedule = BellSchedule(),
+                scheduleDirty = false,
+                scheduleLoaded = true,
+                undoAvailable = false,
+                scheduleIssue = null,
+                message = text(R.string.reset_done),
+            )
+        }
+        applyStatus(api.getStatus().toDomain())
     }
 
     fun clearMessage() {

@@ -102,6 +102,8 @@ class ApiClient(context: Context) {
     suspend fun saveSettings(ringDefault: Int): ApiResponse =
         decode(read("POST", "/settings", json.encodeToString(SettingsRequest(ringDefault))))
 
+    suspend fun factoryReset(): ApiResponse = decode(read("POST", "/reset"))
+
     fun hasWifiTransport(): Boolean = findWifiNetwork() != null
 
     private suspend fun read(method: String, path: String, body: String? = null): String =
