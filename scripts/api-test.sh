@@ -308,6 +308,17 @@ expect_code 400 "${code}" "POST /settings rejects 0" "${WORK_DIR}/settings_inval
 expect_contains "${WORK_DIR}/settings_invalid.json" '"error":"invalid_ring_default"' \
     "invalid ring_default error code"
 
+# --- Factory reset --------------------------------------------------------
+code="$(request POST /reset "" "${WORK_DIR}/reset.json")"
+expect_code 200 "${code}" "POST /reset" "${WORK_DIR}/reset.json"
+code="$(request GET /schedule "" "${WORK_DIR}/schedule_reset.json")"
+expect_contains "${WORK_DIR}/schedule_reset.json" '"packs":[]' "reset clears the schedule"
+code="$(request GET /settings "" "${WORK_DIR}/settings_reset.json")"
+expect_contains "${WORK_DIR}/settings_reset.json" '"ring_default":5' "reset restores ring_default"
+code="$(request GET /status "" "${WORK_DIR}/status_reset.json")"
+expect_contains "${WORK_DIR}/status_reset.json" '"mode":"auto"' "reset restores auto mode"
+expect_contains "${WORK_DIR}/status_reset.json" '"synced":null' "reset forgets the last sync"
+
 # --- HTML page and 404 ----------------------------------------------------
 code="$(request GET / "" "${WORK_DIR}/index.html")"
 expect_code 200 "${code}" "GET /" "${WORK_DIR}/index.html"

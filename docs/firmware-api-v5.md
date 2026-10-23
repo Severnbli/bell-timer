@@ -34,6 +34,7 @@ via `OPTIONS`.
 | `GET /schedule` | returns the v5 document with limits |
 | `POST /schedule` | accepts v5, and v4 for compatibility |
 | `GET /schedule/day?date=YYYY-MM-DD` | resolved bell list for one date |
+| `POST /reset` | factory reset |
 
 ### `GET /status`
 
@@ -73,6 +74,14 @@ via `OPTIONS`.
 Sets the DS3231 to the phone's local time. The app waits for the phone clock
 to cross a whole second before sending, so the device ends up within network
 latency of the phone. The minute in which the time was set never rings.
+
+### `POST /reset`
+
+Factory reset. Stops a running bell, deletes `/schedule.json` and
+`/settings.json` and returns to the defaults: empty schedule, `auto` mode,
+`ring_default` 5, no `synced`. The clock is kept (it lives in the DS3231).
+Returns `{"ok": true}`, or `500 storage_error` when a file could not be
+deleted.
 
 ### `GET /schedule/day?date=YYYY-MM-DD`
 

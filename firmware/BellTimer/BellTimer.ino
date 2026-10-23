@@ -1565,6 +1565,31 @@ void handlePostSchedule() {
   sendDocument(200, out);
 }
 
+// Factory reset: forgets the schedule, the mode, the ring duration and the
+// last sync time. The clock keeps running; it lives in the DS3231.
+void handlePostReset() {
+  if (!requireToken()) return;
+  stopRing();
+  bool ok = storageOk;
+  if (ok) {
+    if (LittleFS.exists(SCHEDULE_FILE) && !LittleFS.remove(SCHEDULE_FILE)) ok = false;
+    if (LittleFS.exists(SETTINGS_FILE) && !LittleFS.remove(SETTINGS_FILE)) ok = false;
+  }
+  loadSettingsFromFlash();
+  moduleCount = 0;
+  packCount = 0;
+  autoStartDate = 0;
+  autoStopDate = 0;
+  ++scheduleRevision;
+  if (!ok) {
+    sendError(500, "storage_error");
+    return;
+  }
+  JsonDocument out;
+  out["ok"] = true;
+  sendDocument(200, out);
+}
+
 void handleGetSettings() {
   if (!requireToken()) return;
   JsonDocument doc;
@@ -1655,7 +1680,7 @@ void setupHttpRoutes() {
 
   const char *paths[] = {"/",     "/status", "/ring",    "/stop",
                          "/mode", "/time",   "/schedule", "/settings",
-                         "/schedule/day"};
+                         "/schedule/day", "/reset"};
   for (const char *path : paths) {
     server.on(path, HTTP_OPTIONS, handleOptions);
   }
@@ -1672,6 +1697,7 @@ void setupHttpRoutes() {
   server.on("/schedule/day", HTTP_GET, handleGetScheduleDay);
   server.on("/settings", HTTP_GET, handleGetSettings);
   server.on("/settings", HTTP_POST, handlePostSettings);
+  server.on("/reset", HTTP_POST, handlePostReset);
   server.onNotFound(handleNotFound);
 }
 
