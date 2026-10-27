@@ -377,7 +377,7 @@ curl -s -X POST http://192.168.4.1/schedule \
 curl -s 'http://192.168.4.1/schedule/day?date=2026-11-02'
 ```
 
-Limits: 6 packs, 32 modules per pack, 24 individual dates per pack, 192
+Limits: 8 packs, 32 modules per pack, 24 individual dates per pack, 256
 modules in total. The whole payload is validated before anything is written;
 invalid data returns 400 and leaves the old schedule untouched. A bell fires
 at the start of its minute (within a 5 s grace period); the minute in which the

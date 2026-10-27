@@ -205,15 +205,15 @@ setting `ring_default`. A manual ring that is already longer is not shortened.
 
 | Limit | Value | Constant (firmware / app) |
 | --- | --- | --- |
-| Packs | 6 | `MAX_PACKS` |
+| Packs | 8 | `MAX_PACKS` |
 | Modules per pack | 32 | `MAX_PACK_MODULES` |
-| Modules in total | 192 | `MAX_MODULES` |
+| Modules in total | 256 | `MAX_MODULES` |
 | Individual dates per pack | 24 | `MAX_PACK_DATES` |
 | Label / pack name | 32 UTF-8 bytes | `MAX_LABEL_BYTES` / `MAX_PACK_NAME_BYTES` |
-| Request body | 32 KiB | `MAX_SCHEDULE_BODY_BYTES` |
+| Request body | 40 KiB | `MAX_SCHEDULE_BODY_BYTES` |
 
-Reference build (`esp32:esp32:esp32`, firmware 2.0.0): 1 029 416 bytes of
-program storage (78 %) and 65 808 bytes of static RAM (20 %).
+Reference build (`esp32:esp32:esp32`, firmware 2.0.0): 1 038 308 bytes of
+program storage (79 %) and 69 976 bytes of static RAM (21 %).
 
 ## Evaluation
 
@@ -254,9 +254,9 @@ This mirrors `BellSchedule.resolveDay(date)` in
 | --- | --- |
 | `invalid_schedule` | Missing `packs`, invalid field, unknown module type, duplicate pack id, invalid range, `mute` on a base pack |
 | `invalid_json` | Body missing or not parseable |
-| `too_many_packs` | More than 6 packs |
+| `too_many_packs` | More than 8 packs |
 | `too_many_pack_modules` | More than 32 modules in one pack |
-| `too_many_modules` | More than 192 modules in total, or a body larger than 32 KiB |
+| `too_many_modules` | More than 256 modules in total, or a body larger than 40 KiB |
 | `too_many_pack_dates` | More than 24 individual dates in one pack |
 | `invalid_date` | `/schedule/day` without a valid `date` |
 | `invalid_sec`, `invalid_mode`, `invalid_datetime`, `invalid_ring_default` | unchanged |

@@ -9,7 +9,7 @@
   (a bell every `every` minutes from `time` to `until`).
 * A correction with `"mute": true` is a first-class **holiday**: it cancels the
   base packs above it on its dates.
-* Limits: 6 packs, 32 modules per pack, 192 modules, 24 dates per pack. New
+* Limits: 8 packs, 32 modules per pack, 256 modules, 24 dates per pack. New
   error codes `too_many_pack_modules` and `too_many_modules`.
 * v4 documents are migrated (an entry with a `pair` becomes a lesson); v1–v3
   are no longer accepted.

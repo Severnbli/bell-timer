@@ -289,9 +289,9 @@ expect_code 400 "${code}" "POST /schedule rejects more than 32 modules per pack"
 expect_contains "${WORK_DIR}/schedule_too_many.json" '"error":"too_many_pack_modules"' \
     "too many pack modules error code"
 
-MANY_PACKS='{"packs":[{},{},{},{},{},{},{}]}'
+MANY_PACKS='{"packs":[{},{},{},{},{},{},{},{},{}]}'
 code="$(request POST /schedule "${MANY_PACKS}" "${WORK_DIR}/schedule_too_many_packs.json")"
-expect_code 400 "${code}" "POST /schedule rejects more than 6 packs" "${WORK_DIR}/schedule_too_many_packs.json"
+expect_code 400 "${code}" "POST /schedule rejects more than 8 packs" "${WORK_DIR}/schedule_too_many_packs.json"
 expect_contains "${WORK_DIR}/schedule_too_many_packs.json" '"error":"too_many_packs"' "too many packs error code"
 
 # --- Settings -------------------------------------------------------------

@@ -59,7 +59,15 @@ const uint8_t PIN_I2C_SCL = BELLTIMER_PIN_I2C_SCL;
 // end, a series rings every N minutes). A base pack contributes its bells; a
 // correction cancels the bells of every base pack above it. The limits below
 // are mirrored by the Android app (data/Schedule.kt).
-const size_t MAX_PACKS = 6;            // ordered packs
+//
+// They are sized for the worst case: every module a lesson or series with all
+// days and a 32-byte Cyrillic label, every pack with 24 dates. Such a full
+// schedule is a ~36 KB request and, while POST /schedule runs, is estimated to
+// need about 120 KB of heap (body, parsed document, old and new labels) out of
+// roughly 180 KB free with the access point up; the rest stays as headroom.
+// Do not lower MAX_PACK_MODULES: a stored schedule above the new limit would
+// no longer load after a firmware update.
+const size_t MAX_PACKS = 8;            // ordered packs
 const size_t MAX_PACK_MODULES = 32;    // modules inside one pack
 const size_t MAX_PACK_DATES = 24;      // individual dates inside one pack
 const size_t MAX_MODULES = MAX_PACKS * MAX_PACK_MODULES;
@@ -67,7 +75,7 @@ const size_t MAX_LABEL_BYTES = 32;     // About 10 Cyrillic characters in UTF-8.
 const size_t MAX_PACK_NAME_BYTES = 32;
 // Bodies larger than this are rejected before parsing, so an oversized
 // document cannot exhaust the heap.
-const size_t MAX_SCHEDULE_BODY_BYTES = 32768;
+const size_t MAX_SCHEDULE_BODY_BYTES = 40960;
 const uint16_t MINUTES_PER_DAY = 1440;
 const uint16_t MAX_LESSON_MINUTES = 720;
 const uint8_t MAX_PRE_MINUTES = 60;
@@ -449,13 +457,16 @@ bool clearOscillatorStopFlag() {
 
 // --------------------------- Storage layer --------------------------------
 
-bool writeFileAtomic(const char *path, const String &data) {
+// Replaces "path" with the bytes produced by write(), via a temporary file.
+// write() receives the open file and returns true when everything was written.
+template <typename Writer>
+bool writeFileAtomicWith(const char *path, Writer write) {
   String tmpPath = String(path) + ".tmp";
   File out = LittleFS.open(tmpPath, "w");
   if (!out) return false;
-  size_t written = out.print(data);
+  bool written = write(out);
   out.close();
-  if (written != data.length()) {
+  if (!written) {
     LittleFS.remove(tmpPath);
     return false;
   }
@@ -467,6 +478,20 @@ bool writeFileAtomic(const char *path, const String &data) {
     return false;
   }
   return true;
+}
+
+bool writeFileAtomic(const char *path, const String &data) {
+  return writeFileAtomicWith(path, [&data](File &out) {
+    return out.print(data) == data.length();
+  });
+}
+
+// Serializes straight into the file, so no String copy of the document is
+// held in RAM next to it.
+bool writeJsonFileAtomic(const char *path, const JsonDocument &doc) {
+  return writeFileAtomicWith(path, [&doc](File &out) {
+    return serializeJson(doc, out) == measureJson(doc);
+  });
 }
 
 String sanitizeMode(const String &value) {
@@ -828,9 +853,11 @@ const char *parseScheduleDocument(JsonDocument &doc) {
 }
 
 void applyParsedSchedule() {
-  for (size_t i = 0; i < parsedModuleCount; ++i) modules[i] = parsedModules[i];
+  // Moving the labels leaves the scratch buffers empty, so their heap copies
+  // are not kept alive next to the live ones.
+  for (size_t i = 0; i < parsedModuleCount; ++i) modules[i] = std::move(parsedModules[i]);
   moduleCount = parsedModuleCount;
-  for (size_t i = 0; i < parsedPackCount; ++i) packs[i] = parsedPacks[i];
+  for (size_t i = 0; i < parsedPackCount; ++i) packs[i] = std::move(parsedPacks[i]);
   packCount = parsedPackCount;
   autoStartDate = parsedAutoStart;
   autoStopDate = parsedAutoStop;
@@ -918,9 +945,7 @@ void buildScheduleDocument(JsonDocument &doc, bool includeLimits) {
 bool saveScheduleToFlash() {
   JsonDocument doc;
   buildScheduleDocument(doc, false);
-  String payload;
-  serializeJson(doc, payload);
-  bool ok = storageOk && writeFileAtomic(SCHEDULE_FILE, payload);
+  bool ok = storageOk && writeJsonFileAtomic(SCHEDULE_FILE, doc);
   if (!ok) {
     storageOk = false;
     storageRetryPending = true;
@@ -1613,17 +1638,21 @@ void handleGetScheduleDay() {
 void handlePostSchedule() {
   if (!requireToken()) return;
 
-  JsonDocument doc;
-  const char *errorCode = nullptr;
-  if (!readJsonBody(doc, errorCode)) {
-    sendError(400, errorCode);
-    return;
-  }
+  // The parsed request is freed before the schedule is saved, so the request
+  // document and the one written to flash are never in RAM together.
+  {
+    JsonDocument doc;
+    const char *errorCode = nullptr;
+    if (!readJsonBody(doc, errorCode)) {
+      sendError(400, errorCode);
+      return;
+    }
 
-  const char *validationError = parseScheduleDocument(doc);
-  if (validationError != nullptr) {
-    sendError(400, validationError);
-    return;
+    const char *validationError = parseScheduleDocument(doc);
+    if (validationError != nullptr) {
+      sendError(400, validationError);
+      return;
+    }
   }
 
   // Commit the validated document, then persist exactly that state. The write

@@ -4,7 +4,7 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 
 /** Firmware limits, mirrored in firmware/BellTimer/BellTimer.ino. */
-const val MAX_PACKS = 6
+const val MAX_PACKS = 8
 const val MAX_PACK_MODULES = 32
 const val MAX_PACK_DATES = 24
 const val MAX_MODULES = MAX_PACKS * MAX_PACK_MODULES
