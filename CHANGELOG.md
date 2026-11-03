@@ -1,5 +1,48 @@
 # Changelog
 
+## Unreleased – firmware 2.1.0 (API 6), app 1.5.0
+
+### Updates
+
+* Firmware updates over Wi-Fi: `POST /update` writes the image into the idle
+  OTA slot, checks its MD5 and restarts; a broken transfer keeps the old
+  firmware. The schedule and every setting stay.
+* The app checks GitHub for new app and firmware releases on start and from
+  Settings → Updates, downloads firmware with a SHA-256 check and installs it
+  on the device with a progress bar. Requests use mobile data while the phone
+  is joined to the bell.
+* Version dependencies: each firmware declares the oldest app it supports
+  (`min_app` in `/status` and `firmware.json`), each app the oldest firmware
+  (`min_firmware` in `app.json`); the app refuses or warns accordingly.
+* New `firmware-release` workflow publishes `firmware-v*` releases. App
+  releases are now signed with one permanent key, so updates install over the
+  old app (one last uninstall is needed when coming from 1.4.x).
+
+### Settings that survive
+
+* The wiring moves to `/device.json` (`GET/POST /device`, Settings → Wiring);
+  channel, client limit and local-only mode join `/network.json`. Missing
+  files are created from the build defaults on the first boot, so a release
+  build never changes a device that already runs.
+* A schedule the firmware cannot read is kept as `/schedule.json.bad`.
+
+### Schedule version 6
+
+* A pack can run in up to 8 date ranges (`ranges`). One range is still written
+  as `from`/`to`, so older firmware and apps read it.
+
+### Network
+
+* "Keep mobile internet" (`local_only`): the access point announces no
+  gateway, so phones keep mobile data. The switch is a trial and reverts unless
+  a client returns within 3 minutes.
+
+### Security
+
+* No CORS headers; every POST must be JSON, so web pages cannot drive the bell.
+* Token compared in constant time; 10 wrong tokens lock requests for 30 s.
+* Firmware updates require a token, sent in the `X-Token` header.
+
 ## Unreleased — schedule version 5 (modules), firmware 2.0.0
 
 ### Schema: v4 → v5 (firmware and app)

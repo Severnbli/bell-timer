@@ -327,7 +327,7 @@ data class BellSchedule(
 
     /**
      * The single source of truth for what rings on a date. The firmware applies
-     * exactly the same rules (collectDayBells(), docs/firmware-api-v5.md):
+     * exactly the same rules (collectDayBells(), docs/firmware-api.md):
      *
      * Packs are walked top to bottom. A base pack adds the bells of its modules
      * for this weekday. A correction applies when it is muted or has a module
