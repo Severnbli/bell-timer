@@ -124,7 +124,7 @@ jobs:
           BELLTIMER_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          ./gradlew --no-daemon assembleRelease testReleaseUnitTest \
+          ./gradlew --no-daemon assembleRelease testDebugUnitTest \
             -PappVersionName="${{ steps.meta.outputs.version }}" \
             -PappVersionCode="${{ steps.meta.outputs.version_code }}"
           rm -f "$BELLTIMER_KEYSTORE_FILE"
