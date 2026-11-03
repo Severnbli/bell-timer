@@ -14,6 +14,7 @@
     <string name="clear">Clear</string>
     <string name="change">Change</string>
     <string name="undo">Undo</string>
+    <string name="later">Later</string>
     <string name="open">Open</string>
     <string name="back">Back</string>
     <string name="more">More</string>
@@ -401,7 +402,8 @@
     <string name="issue_ranges_need_firmware">Several date ranges need firmware 2.1.0 or newer</string>
     <string name="device_error_network_config">The stored network settings are damaged; the defaults are in use. Save the network again.</string>
     <string name="device_error_device_config">The stored wiring is damaged; the default wiring is in use. Save it again.</string>
-    <string name="update_title">Updates</string>
+    <string name="update_dialog_title">Update available</string>
+    <string name="update_dialog_text">You can download and install it under Settings → About.</string>
     <string name="update_version_arrow">%1$s → %2$s</string>
     <string name="update_version_current">%1$s, up to date</string>
     <string name="update_latest">latest %1$s</string>
@@ -411,7 +413,7 @@
     <string name="update_not_checked">Not checked yet</string>
     <string name="update_none">Everything is up to date</string>
     <string name="update_app_available">App version %1$s is available</string>
-    <string name="update_firmware_available">Firmware %1$s is available – see Settings → Updates</string>
+    <string name="update_firmware_available">Firmware %1$s is available</string>
     <string name="update_firmware_banner">Firmware %1$s is available. Install it from the settings.</string>
     <string name="update_open_app_page">Download app %1$s</string>
     <string name="update_app_needs_firmware">The new app needs firmware %1$s or newer: update the firmware first.</string>

@@ -14,6 +14,7 @@
     <string name="clear">Скінуць</string>
     <string name="change">Змяніць</string>
     <string name="undo">Вярнуць</string>
+    <string name="later">Пазней</string>
     <string name="open">Адкрыць</string>
     <string name="back">Назад</string>
     <string name="more">Яшчэ</string>
@@ -409,7 +410,8 @@
     <string name="issue_ranges_need_firmware">Некалькі дыяпазонаў дат патрабуюць прашыўку 2.1.0 або навейшую</string>
     <string name="device_error_network_config">Захаваныя налады сеткі пашкоджаны, працуюць заводскія. Захавайце сетку зноў.</string>
     <string name="device_error_device_config">Захаваная распіноўка пашкоджана, працуе заводская. Захавайце яе зноў.</string>
-    <string name="update_title">Абнаўленні</string>
+    <string name="update_dialog_title">Даступна абнаўленне</string>
+    <string name="update_dialog_text">Спампаваць і ўсталяваць яго можна ў «Налады → Пра сістэму».</string>
     <string name="update_version_arrow">%1$s → %2$s</string>
     <string name="update_version_current">%1$s, актуальная</string>
     <string name="update_latest">апошняя %1$s</string>
@@ -419,7 +421,7 @@
     <string name="update_not_checked">Яшчэ не правяралася</string>
     <string name="update_none">Абнаўленняў няма</string>
     <string name="update_app_available">Даступная новая версія праграмы %1$s</string>
-    <string name="update_firmware_available">Даступная прашыўка %1$s – адкрыйце «Налады → Абнаўленні»</string>
+    <string name="update_firmware_available">Даступная прашыўка %1$s</string>
     <string name="update_firmware_banner">Даступная прашыўка %1$s. Усталяваць можна ў наладах.</string>
     <string name="update_open_app_page">Спампаваць праграму %1$s</string>
     <string name="update_app_needs_firmware">Новай праграме патрэбна прашыўка %1$s або навейшая: спачатку абнавіце прашыўку.</string>
