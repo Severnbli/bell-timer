@@ -483,6 +483,7 @@ private fun UpdatesCard(state: UiState, viewModel: AppViewModel) {
             when {
                 deviceFw != null && latestFw != null && isNewer(latestFw.version, deviceFw) ->
                     stringResource(R.string.update_version_arrow, deviceFw, latestFw.version)
+                deviceFw != null && latestFw != null -> stringResource(R.string.update_version_current, deviceFw)
                 deviceFw != null -> deviceFw
                 latestFw != null -> stringResource(R.string.update_latest, latestFw.version)
                 else -> stringResource(R.string.unknown)
