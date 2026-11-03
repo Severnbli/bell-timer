@@ -1079,8 +1079,13 @@ private fun PackOptionsSheet(
     onMove: (Int) -> Unit,
     onDelete: () -> Unit,
 ) {
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(modifier = Modifier.padding(bottom = 24.dp)) {
+    // Open fully: half-expanded, the sheet hides "Delete pack" below the fold.
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        Column(
+            modifier = Modifier
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 24.dp),
+        ) {
             Column(modifier = Modifier.padding(horizontal = 24.dp)) {
                 Text(pack.displayName(), style = MaterialTheme.typography.titleLarge)
                 Spacer(Modifier.height(6.dp))
