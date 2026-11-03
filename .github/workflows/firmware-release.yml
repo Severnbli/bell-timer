@@ -1,0 +1,217 @@
+name: Firmware release
+
+# Manual only: run it from the Actions tab (or `gh workflow run firmware-release`),
+# pass the version and the workflow builds the ESP32 firmware and publishes it
+# as a GitHub release tagged firmware-v<version>. The Android app finds these
+# releases and installs them over Wi-Fi.
+#
+# The build uses .env.example: its values are only defaults for a device that
+# has never stored its own. A running device keeps its Wi-Fi, token and wiring
+# from /network.json and /device.json across an update.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Firmware version, for example 2.1.0 ("v" prefix is allowed)'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark the release as a pre-release (the app ignores pre-releases)'
+        required: false
+        type: boolean
+        default: false
+      draft:
+        description: 'Create the GitHub release as a draft'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: firmware-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Pinned so that a release is reproducible and the partition layout (and
+  # with it LittleFS, where the settings live) never changes by surprise.
+  ESP32_CORE: esp32:esp32@3.3.12
+  ESP32_INDEX: https://espressif.github.io/arduino-esp32/package_esp32_index.json
+  FQBN: esp32:esp32:esp32:PartitionScheme=default
+  # Size of an app slot in the default partition scheme (0x140000).
+  MAX_APP_BYTES: 1310720
+
+jobs:
+  build-and-release:
+    name: Build firmware and publish release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Resolve release version
+        id: meta
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          version="${INPUT_VERSION#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::Version must look like 2.1.0 (got '$INPUT_VERSION')"
+            exit 1
+          fi
+          sketch=firmware/BellTimer/BellTimer.ino
+          api="$(sed -n 's/^const uint8_t API_VERSION = \([0-9]\+\);.*/\1/p' "$sketch")"
+          min_app="$(sed -n 's/^const char \*const MIN_APP_VERSION = "\([^"]\+\)";.*/\1/p' "$sketch")"
+          if [[ -z "$api" || -z "$min_app" ]]; then
+            echo "::error::Could not read API_VERSION or MIN_APP_VERSION from $sketch"
+            exit 1
+          fi
+          {
+            echo "version=$version"
+            echo "tag=firmware-v$version"
+            echo "api=$api"
+            echo "min_app=$min_app"
+          } >> "$GITHUB_OUTPUT"
+          echo "Firmware $version, API $api, needs app >= $min_app"
+
+      - name: Set up Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Cache Arduino cores and libraries
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.arduino15
+            ~/Arduino/libraries
+          key: arduino-${{ env.ESP32_CORE }}-rtclib-2.1.4-arduinojson-7.4.3
+
+      - name: Install core and libraries
+        run: |
+          set -euo pipefail
+          arduino-cli config init --overwrite --additional-urls "$ESP32_INDEX"
+          arduino-cli core update-index
+          arduino-cli core install "$ESP32_CORE"
+          arduino-cli lib install "RTClib@2.1.4" "ArduinoJson@7.4.3"
+
+      - name: Build firmware
+        env:
+          FW_VERSION: ${{ steps.meta.outputs.version }}
+          ENV_FILE: .env.example
+        run: |
+          set -euo pipefail
+          FQBN="$FQBN" scripts/build-firmware.sh --output-dir build
+          ls -l build
+
+      - name: Collect artifacts
+        id: dist
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          API: ${{ steps.meta.outputs.api }}
+          MIN_APP: ${{ steps.meta.outputs.min_app }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          app="belltimer-firmware-v${VERSION}.bin"
+          full="belltimer-firmware-v${VERSION}-full.bin"
+          cp build/BellTimer.ino.bin "dist/$app"
+          cp build/BellTimer.ino.merged.bin "dist/$full"
+
+          size="$(stat -c %s "dist/$app")"
+          if (( size > MAX_APP_BYTES )); then
+            echo "::error::Firmware is $size bytes, the OTA slot holds $MAX_APP_BYTES"
+            exit 1
+          fi
+          if ! grep -qaF "$VERSION" "dist/$app"; then
+            echo "::error::The image does not contain the version string $VERSION"
+            exit 1
+          fi
+
+          sha256="$(sha256sum "dist/$app" | cut -d' ' -f1)"
+          md5="$(md5sum "dist/$app" | cut -d' ' -f1)"
+          jq -n \
+            --arg version "$VERSION" \
+            --argjson api "$API" \
+            --arg min_app "$MIN_APP" \
+            --arg file "$app" \
+            --argjson size "$size" \
+            --arg sha256 "$sha256" \
+            --arg md5 "$md5" \
+            '{version: $version, api: $api, min_app: $min_app, file: $file,
+              size: $size, sha256: $sha256, md5: $md5}' > dist/firmware.json
+          (cd dist && sha256sum "$app" "$full" > SHA256SUMS)
+          cat dist/firmware.json
+          echo "app=$app" >> "$GITHUB_OUTPUT"
+          echo "full=$full" >> "$GITHUB_OUTPUT"
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: belltimer-firmware-v${{ steps.meta.outputs.version }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          API: ${{ steps.meta.outputs.api }}
+          MIN_APP: ${{ steps.meta.outputs.min_app }}
+          APP_BIN: ${{ steps.dist.outputs.app }}
+          FULL_BIN: ${{ steps.dist.outputs.full }}
+          SHA256: ${{ steps.dist.outputs.sha256 }}
+          PRERELEASE: ${{ inputs.prerelease }}
+          DRAFT: ${{ inputs.draft }}
+        run: |
+          set -euo pipefail
+          {
+            echo "**Bell timer firmware ${VERSION}** (API ${API}, needs app ${MIN_APP} or newer)"
+            echo
+            echo "Update from the app: Settings → Updates. The schedule, the settings, the"
+            echo "Wi-Fi network and the wiring stay on the device."
+            echo
+            echo "- \`${APP_BIN}\`: the image the app installs over Wi-Fi"
+            echo "- \`${FULL_BIN}\`: full flash image for a first install over USB:"
+            echo
+            echo '```bash'
+            echo "esptool.py --chip esp32 write_flash 0x0 ${FULL_BIN}"
+            echo '```'
+            echo
+            echo "  A full image also contains an empty file system, so it erases the"
+            echo "  stored schedule and settings. Use it only on a new device."
+            echo
+            echo "SHA-256 of the update image: \`${SHA256}\`"
+          } > release-notes.md
+
+          # The app releases (tags v*) stay the repository's "latest" release.
+          flags=(--title "Firmware v${VERSION}" --notes-file release-notes.md --latest=false)
+          if [[ "$PRERELEASE" == "true" ]]; then
+            flags+=(--prerelease)
+          fi
+          if [[ "$DRAFT" == "true" ]]; then
+            flags+=(--draft)
+          fi
+
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "Release $TAG already exists, replacing its assets."
+            gh release upload "$TAG" dist/* --clobber
+            gh release edit "$TAG" "${flags[@]}"
+          else
+            gh release create "$TAG" dist/* "${flags[@]}" --target "$GITHUB_SHA"
+          fi
+
+      - name: Write job summary
+        run: |
+          {
+            echo "## Firmware v${{ steps.meta.outputs.version }}"
+            echo
+            echo "- tag: \`${{ steps.meta.outputs.tag }}\`"
+            echo "- API: \`${{ steps.meta.outputs.api }}\`"
+            echo "- needs app: \`${{ steps.meta.outputs.min_app }}\` or newer"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -11,6 +11,12 @@ val appVersionName: String =
 val appVersionCode: Int =
     (findProperty("appVersionCode") as String?)?.trim()?.toIntOrNull() ?: 1
 
+// Release signing. Android installs an update only when it is signed with the
+// same key as the installed app, so every release must use one permanent key.
+// CI passes it through these environment variables (see android-release.yml);
+// without them the release build is left unsigned.
+val releaseKeystore: String? = System.getenv("BELLTIMER_KEYSTORE_FILE")?.takeIf { it.isNotBlank() }
+
 android {
     namespace = "com.belltimer.app"
     compileSdk {
@@ -29,8 +35,22 @@ android {
         versionName = appVersionName
     }
 
+    signingConfigs {
+        if (releaseKeystore != null) {
+            create("release") {
+                storeFile = file(releaseKeystore)
+                storePassword = System.getenv("BELLTIMER_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("BELLTIMER_KEY_ALIAS")
+                keyPassword = System.getenv("BELLTIMER_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
+            if (releaseKeystore != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
