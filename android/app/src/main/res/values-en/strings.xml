@@ -343,6 +343,8 @@
     <string name="network_invalid_password">Password: 8 to 63 characters</string>
     <string name="network_invalid_token">Token: up to 64 Latin letters, digits and symbols, no spaces</string>
 
+    <string name="developer_title">Developer settings</string>
+    <string name="developer_hint">Connection, access point, wiring and factory reset</string>
     <string name="language_title">Language</string>
     <string name="language_system">System default</string>
 

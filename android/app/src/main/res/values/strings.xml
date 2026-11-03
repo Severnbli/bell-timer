@@ -356,6 +356,8 @@
     <string name="network_invalid_password">Пароль: от 8 до 63 символов</string>
     <string name="network_invalid_token">Токен: до 64 латинских букв, цифр и знаков, без пробелов</string>
 
+    <string name="developer_title">Настройки разработчика</string>
+    <string name="developer_hint">Подключение, точка доступа, распиновка и сброс</string>
     <string name="language_title">Язык</string>
     <string name="language_system">Как в системе</string>
     <string name="settings_time_title">Время</string>
