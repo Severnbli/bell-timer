@@ -146,9 +146,9 @@ fun driftText(seconds: Long): String {
 fun windowSummary(window: PackWindow): String {
     if (!window.isSet) return stringResource(R.string.window_always)
     val parts = mutableListOf<String>()
-    if (window.hasRange) {
-        val from = window.from?.let { if (window.yearly) it.shortDate() else it.fullDate() }
-        val to = window.to?.let { if (window.yearly) it.shortDate() else it.fullDate() }
+    for (range in window.ranges) {
+        val from = range.from?.let { if (window.yearly) it.shortDate() else it.fullDate() }
+        val to = range.to?.let { if (window.yearly) it.shortDate() else it.fullDate() }
         parts += when {
             from != null && to != null -> "$from – $to"
             from != null -> stringResource(R.string.window_from, from)

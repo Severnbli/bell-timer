@@ -205,7 +205,7 @@
     <string name="pack_deleted">Пачка выдалена</string>
 
     <string name="window_title">Калі дзейнічае</string>
-    <string name="window_hint">Пачка працуе ў дыяпазоне дат або ў асобныя даты. Без абмежаванняў — заўсёды.</string>
+    <string name="window_hint">Пачка працуе ў выбраных дыяпазонах дат і ў асобныя даты. Без абмежаванняў – заўсёды.</string>
     <string name="window_always">Заўсёды</string>
     <string name="window_from">з %1$s</string>
     <string name="window_to">па %1$s</string>
@@ -400,4 +400,9 @@
     <string name="error_device_generic">Памылка прылады: %1$s</string>
     <string name="error_http">Памылка прылады (код %1$d)</string>
     <string name="error_unexpected">Нечаканая памылка: %1$s</string>
+    <string name="window_ranges">Дыяпазоны дат</string>
+    <string name="window_add_range">Дадаць дыяпазон (%1$d з %2$d)</string>
+    <string name="window_remove_range">Выдаліць дыяпазон</string>
+    <string name="error_too_many_pack_ranges">Не больш за 8 дыяпазонаў дат у пачцы</string>
+    <string name="issue_ranges_need_firmware">Некалькі дыяпазонаў дат патрабуюць прашыўку 2.1.0 або навейшую</string>
 </resources>

@@ -203,7 +203,7 @@
     <string name="pack_deleted">Пачка удалена</string>
 
     <string name="window_title">Когда действует</string>
-    <string name="window_hint">Пачка работает в диапазоне дат или в отдельные даты. Без ограничений — всегда.</string>
+    <string name="window_hint">Пачка работает в выбранных диапазонах дат и в отдельные даты. Без ограничений – всегда.</string>
     <string name="window_always">Всегда</string>
     <string name="window_from">с %1$s</string>
     <string name="window_to">по %1$s</string>
@@ -404,4 +404,9 @@
     <string name="error_device_generic">Ошибка устройства: %1$s</string>
     <string name="error_http">Ошибка устройства (код %1$d)</string>
     <string name="error_unexpected">Неожиданная ошибка: %1$s</string>
+    <string name="window_ranges">Диапазоны дат</string>
+    <string name="window_add_range">Добавить диапазон (%1$d из %2$d)</string>
+    <string name="window_remove_range">Удалить диапазон</string>
+    <string name="error_too_many_pack_ranges">Не больше 8 диапазонов дат в пачке</string>
+    <string name="issue_ranges_need_firmware">Несколько диапазонов дат требуют прошивку 2.1.0 или новее</string>
 </resources>

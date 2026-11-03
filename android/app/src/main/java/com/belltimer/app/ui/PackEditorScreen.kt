@@ -64,13 +64,16 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.belltimer.app.AppViewModel
 import com.belltimer.app.R
 import com.belltimer.app.UiState
+import com.belltimer.app.data.DateRange
 import com.belltimer.app.data.LessonTemplate
+import com.belltimer.app.data.MAX_PACK_RANGES
 import com.belltimer.app.data.MAX_PACK_MODULES
 import com.belltimer.app.data.PackKind
 import com.belltimer.app.data.PackWindow
 import com.belltimer.app.data.ScheduleModule
 import com.belltimer.app.data.SchedulePack
 import com.belltimer.app.data.canAddDate
+import com.belltimer.app.data.canAddRange
 import com.belltimer.app.data.canAddModules
 import com.belltimer.app.data.canAddPack
 import com.belltimer.app.data.packNameTooLong
@@ -522,10 +525,24 @@ private fun EmptyModules(onGrid: () -> Unit, onAdd: () -> Unit) {
     }
 }
 
+/** What the date picker of [PackWindowDialog] is filling in. */
+private sealed interface WindowPick {
+    data class RangeFrom(val index: Int) : WindowPick
+    data class RangeTo(val index: Int) : WindowPick
+    /** A new range, starting at the picked date. */
+    data object NewRange : WindowPick
+    data object SingleDate : WindowPick
+}
+
 @Composable
 private fun PackWindowDialog(pack: SchedulePack, onDismiss: () -> Unit, onSave: (PackWindow) -> Unit) {
     var window by remember { mutableStateOf(pack.window) }
-    var picking by remember { mutableStateOf<Int?>(null) }
+    var picking by remember { mutableStateOf<WindowPick?>(null) }
+
+    fun updateRange(index: Int, change: (DateRange) -> DateRange) {
+        window = window.copy(ranges = window.ranges.mapIndexed { i, range -> if (i == index) change(range) else range })
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.window_title)) },
@@ -539,8 +556,56 @@ private fun PackWindowDialog(pack: SchedulePack, onDismiss: () -> Unit, onSave: 
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                DateRow(stringResource(R.string.date_from), window.from, { picking = 0 }, { window = window.copy(from = null) })
-                DateRow(stringResource(R.string.date_to), window.to, { picking = 1 }, { window = window.copy(to = null) })
+                Caption(stringResource(R.string.window_ranges))
+                window.ranges.forEachIndexed { index, range ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            // A range keeps at least one side; clearing the last
+                            // one removes the whole range.
+                            DateRow(
+                                stringResource(R.string.date_from),
+                                range.from,
+                                { picking = WindowPick.RangeFrom(index) },
+                                if (range.to != null) {
+                                    { updateRange(index) { it.copy(from = null) } }
+                                } else {
+                                    null
+                                },
+                            )
+                            DateRow(
+                                stringResource(R.string.date_to),
+                                range.to,
+                                { picking = WindowPick.RangeTo(index) },
+                                if (range.from != null) {
+                                    { updateRange(index) { it.copy(to = null) } }
+                                } else {
+                                    null
+                                },
+                            )
+                            if (!range.isValid(window.yearly)) {
+                                Text(
+                                    stringResource(R.string.issue_pack_window),
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                        }
+                        IconButton(onClick = {
+                            window = window.copy(ranges = window.ranges.filterIndexed { i, _ -> i != index })
+                        }) {
+                            Icon(Icons.Default.Close, contentDescription = stringResource(R.string.window_remove_range))
+                        }
+                    }
+                    ThinDivider()
+                }
+                TextButton(
+                    onClick = { picking = WindowPick.NewRange },
+                    enabled = window.canAddRange(),
+                ) {
+                    Icon(Icons.Default.DateRange, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.window_add_range, window.ranges.size, MAX_PACK_RANGES))
+                }
                 SettingRow(
                     title = stringResource(R.string.window_yearly),
                     subtitle = stringResource(R.string.window_yearly_hint),
@@ -561,19 +626,12 @@ private fun PackWindowDialog(pack: SchedulePack, onDismiss: () -> Unit, onSave: 
                     }
                 }
                 TextButton(
-                    onClick = { picking = 2 },
+                    onClick = { picking = WindowPick.SingleDate },
                     enabled = pack.copy(window = window).canAddDate(),
                 ) {
                     Icon(Icons.Default.DateRange, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
                     Text(stringResource(R.string.window_add_date))
-                }
-                if (!window.isValid) {
-                    Text(
-                        stringResource(R.string.issue_pack_window),
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
                 }
             }
         },
@@ -589,19 +647,22 @@ private fun PackWindowDialog(pack: SchedulePack, onDismiss: () -> Unit, onSave: 
             }
         },
     )
-    picking?.let { which ->
+    picking?.let { target ->
+        val lastEnd = window.ranges.mapNotNull { it.to ?: it.from }.maxOrNull()
         DatePickerDialog(
-            initial = when (which) {
-                0 -> window.from
-                1 -> window.to
-                else -> window.dates.maxOrNull()?.plusDays(1) ?: LocalDate.now()
+            initial = when (target) {
+                is WindowPick.RangeFrom -> window.ranges.getOrNull(target.index)?.let { it.from ?: it.to }
+                is WindowPick.RangeTo -> window.ranges.getOrNull(target.index)?.let { it.to ?: it.from }
+                WindowPick.NewRange -> lastEnd?.plusDays(1) ?: LocalDate.now()
+                WindowPick.SingleDate -> window.dates.maxOrNull()?.plusDays(1) ?: LocalDate.now()
             },
             onDismiss = { picking = null },
-            onConfirm = {
-                window = when (which) {
-                    0 -> window.copy(from = it)
-                    1 -> window.copy(to = it)
-                    else -> window.copy(dates = window.dates + it)
+            onConfirm = { date ->
+                when (target) {
+                    is WindowPick.RangeFrom -> updateRange(target.index) { it.copy(from = date) }
+                    is WindowPick.RangeTo -> updateRange(target.index) { it.copy(to = date) }
+                    WindowPick.NewRange -> window = window.copy(ranges = window.ranges + DateRange(from = date))
+                    WindowPick.SingleDate -> window = window.copy(dates = window.dates + date)
                 }
                 picking = null
             },

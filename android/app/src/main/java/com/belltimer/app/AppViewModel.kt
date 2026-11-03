@@ -601,6 +601,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         is ScheduleIssue.TooManyPacks -> text(R.string.error_too_many_packs)
         is ScheduleIssue.TooManyPackModules -> text(R.string.error_too_many_pack_modules)
         is ScheduleIssue.TooManyPackDates -> text(R.string.error_too_many_pack_dates)
+        is ScheduleIssue.TooManyPackRanges -> text(R.string.error_too_many_pack_ranges)
+        is ScheduleIssue.RangesNeedFirmware -> text(R.string.issue_ranges_need_firmware)
         is ScheduleIssue.InvalidModule -> text(R.string.issue_invalid_module)
         is ScheduleIssue.FirmwareTooOld -> text(R.string.issue_firmware_too_old)
     }
@@ -632,6 +634,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             "too_many_modules", "too_many_pack_modules" -> text(R.string.error_too_many_pack_modules)
             "too_many_packs" -> text(R.string.error_too_many_packs)
             "too_many_pack_dates" -> text(R.string.error_too_many_pack_dates)
+            "too_many_pack_ranges" -> text(R.string.error_too_many_pack_ranges)
             "invalid_ring_default" -> text(R.string.settings_invalid_duration)
             "invalid_json" -> text(R.string.error_invalid_json)
             "storage_error" -> text(R.string.error_storage_device)

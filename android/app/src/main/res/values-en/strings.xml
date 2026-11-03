@@ -197,7 +197,7 @@
     <string name="pack_deleted">Pack deleted</string>
 
     <string name="window_title">Active when</string>
-    <string name="window_hint">The pack works within a date range or on single dates. Without limits it is always active.</string>
+    <string name="window_hint">The pack works within the chosen date ranges and on single dates. Without limits it is always active.</string>
     <string name="window_always">Always</string>
     <string name="window_from">from %1$s</string>
     <string name="window_to">until %1$s</string>
@@ -392,4 +392,9 @@
     <string name="error_device_generic">Device error: %1$s</string>
     <string name="error_http">Device error (code %1$d)</string>
     <string name="error_unexpected">Unexpected error: %1$s</string>
+    <string name="window_ranges">Date ranges</string>
+    <string name="window_add_range">Add range (%1$d of %2$d)</string>
+    <string name="window_remove_range">Remove range</string>
+    <string name="error_too_many_pack_ranges">At most 8 date ranges per pack</string>
+    <string name="issue_ranges_need_firmware">Several date ranges need firmware 2.1.0 or newer</string>
 </resources>
