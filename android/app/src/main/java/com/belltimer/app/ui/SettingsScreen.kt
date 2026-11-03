@@ -1,8 +1,21 @@
 package com.belltimer.app.ui
 
 import androidx.activity.compose.LocalActivity
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.FlowRow
+import android.content.res.Resources
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material3.RadioButton
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.semantics.Role
+import java.util.Locale
+import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.AlertDialog
@@ -72,36 +85,32 @@ private const val SLIDER_MAX_SECONDS = 10
 
 @Composable
 fun SettingsScreen(state: UiState, viewModel: AppViewModel) {
+    var developer by rememberSaveable { mutableStateOf(false) }
+    if (developer) {
+        // Registered after the tab's own handler, so Back closes this page first.
+        BackHandler { developer = false }
+        DeveloperSettingsScreen(state = state, viewModel = viewModel, onBack = { developer = false })
+    } else {
+        GeneralSettingsScreen(state = state, viewModel = viewModel, onOpenDeveloper = { developer = true })
+    }
+}
+
+/** What every user needs: ring duration, time, language, updates, about. */
+@Composable
+private fun GeneralSettingsScreen(state: UiState, viewModel: AppViewModel, onOpenDeveloper: () -> Unit) {
     val settings = state.settings
-    var baseUrl by rememberSaveable(settings.baseUrl) { mutableStateOf(settings.baseUrl) }
-    var token by rememberSaveable(settings.token) { mutableStateOf(settings.token) }
     var autoSync by rememberSaveable(settings.autoSyncTime) { mutableStateOf(settings.autoSyncTime) }
     var sliderSeconds by rememberSaveable(settings.ringDefault) {
         mutableIntStateOf(settings.ringDefault.coerceAtMost(SLIDER_MAX_SECONDS))
     }
     var custom by rememberSaveable(settings.ringDefault) { mutableStateOf(settings.ringDefault > SLIDER_MAX_SECONDS) }
     var customText by rememberSaveable(settings.ringDefault) { mutableStateOf(settings.ringDefault.toString()) }
-    var confirmReset by remember { mutableStateOf(false) }
-
-    LaunchedEffect(state.online, state.status?.api) {
-        if (state.online) {
-            viewModel.loadNetwork()
-            viewModel.loadDevice()
-        }
-    }
 
     val customSeconds = customText.toIntOrNull()?.takeIf { it in MIN_RING_SECONDS..MAX_RING_SECONDS }
     val ringSeconds = if (custom) customSeconds else sliderSeconds
-    val changed = baseUrl != settings.baseUrl || token != settings.token ||
-        ringSeconds != settings.ringDefault || autoSync != settings.autoSyncTime
+    val changed = ringSeconds != settings.ringDefault || autoSync != settings.autoSyncTime
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
+    SettingsColumn {
         Text(
             text = stringResource(R.string.tab_settings),
             style = MaterialTheme.typography.headlineMedium,
@@ -118,7 +127,7 @@ fun SettingsScreen(state: UiState, viewModel: AppViewModel) {
             Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = ringSeconds?.let { stringResource(R.string.seconds_value, it) } ?: "—",
+                    text = ringSeconds?.let { stringResource(R.string.seconds_value, it) } ?: "–",
                     style = MaterialTheme.typography.headlineMedium.merge(Tabular),
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.weight(1f),
@@ -172,6 +181,75 @@ fun SettingsScreen(state: UiState, viewModel: AppViewModel) {
             )
         }
 
+        SaveButton(enabled = changed && ringSeconds != null) {
+            ringSeconds?.let { viewModel.saveSettings(settings.baseUrl, settings.token, it, autoSync) }
+        }
+
+        LanguageCard()
+
+        UpdatesCard(state = state, viewModel = viewModel)
+
+        AppCard {
+            Text(stringResource(R.string.settings_about_title), style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(4.dp))
+            val status = state.status
+            AboutLine(stringResource(R.string.settings_app_version), appVersionName())
+            AboutLine(
+                stringResource(R.string.settings_fw_version),
+                status?.let { "${it.fw} · API ${it.api}" } ?: stringResource(R.string.unknown),
+            )
+            status?.let {
+                AboutLine(stringResource(R.string.settings_modules), it.modules.toString())
+            }
+        }
+
+        AppCard {
+            SettingRow(
+                title = stringResource(R.string.developer_title),
+                subtitle = stringResource(R.string.developer_hint),
+                onClick = onOpenDeveloper,
+                trailing = {
+                    Icon(
+                        Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                },
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+    }
+}
+
+/** Connection, access point, wiring and factory reset. */
+@Composable
+private fun DeveloperSettingsScreen(state: UiState, viewModel: AppViewModel, onBack: () -> Unit) {
+    val settings = state.settings
+    var baseUrl by rememberSaveable(settings.baseUrl) { mutableStateOf(settings.baseUrl) }
+    var token by rememberSaveable(settings.token) { mutableStateOf(settings.token) }
+    var confirmReset by remember { mutableStateOf(false) }
+
+    LaunchedEffect(state.online, state.status?.api) {
+        if (state.online) {
+            viewModel.loadNetwork()
+            viewModel.loadDevice()
+        }
+    }
+
+    val changed = baseUrl != settings.baseUrl || token != settings.token
+
+    SettingsColumn {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(top = 8.dp),
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back))
+            }
+            Spacer(Modifier.width(4.dp))
+            Text(stringResource(R.string.developer_title), style = MaterialTheme.typography.headlineSmall)
+        }
+
         AppCard {
             Text(stringResource(R.string.settings_connection_title), style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(8.dp))
@@ -195,38 +273,16 @@ fun SettingsScreen(state: UiState, viewModel: AppViewModel) {
             )
         }
 
-        Button(
-            onClick = { ringSeconds?.let { viewModel.saveSettings(baseUrl, token, it, autoSync) } },
-            enabled = changed && ringSeconds != null,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(52.dp),
-        ) { Text(stringResource(R.string.save)) }
+        SaveButton(enabled = changed) {
+            viewModel.saveSettings(baseUrl, token, settings.ringDefault, settings.autoSyncTime)
+        }
 
         if (state.online && state.network != null) {
             NetworkCard(state = state, onSave = viewModel::saveNetwork)
         }
 
-        UpdatesCard(state = state, viewModel = viewModel)
-
         if (state.online && state.device != null) {
             DeviceCard(device = state.device, busy = state.busy, onSave = viewModel::saveDevice)
-        }
-
-        LanguageCard()
-
-        AppCard {
-            Text(stringResource(R.string.settings_about_title), style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(4.dp))
-            val status = state.status
-            AboutLine(stringResource(R.string.settings_app_version), appVersionName())
-            AboutLine(
-                stringResource(R.string.settings_fw_version),
-                status?.let { "${it.fw} · API ${it.api}" } ?: stringResource(R.string.unknown),
-            )
-            status?.let {
-                AboutLine(stringResource(R.string.settings_modules), it.modules.toString())
-            }
         }
 
         AppCard {
@@ -257,6 +313,29 @@ fun SettingsScreen(state: UiState, viewModel: AppViewModel) {
             onDismiss = { confirmReset = false },
         )
     }
+}
+
+@Composable
+private fun SettingsColumn(content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        content = content,
+    )
+}
+
+@Composable
+private fun SaveButton(enabled: Boolean, onClick: () -> Unit) {
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(52.dp),
+    ) { Text(stringResource(R.string.save)) }
 }
 
 @Composable
@@ -661,21 +740,56 @@ private fun DeviceCard(device: DeviceConfigDto, busy: Boolean, onSave: (DeviceCo
     }
 }
 
-/** The app language: the system one or a fixed choice. */
+/**
+ * The app language: the system one or a fixed choice. Each option is named in
+ * itself, with its name in the current language below, so it can be found
+ * from any language.
+ */
 @Composable
 private fun LanguageCard() {
     val activity = LocalActivity.current
     val context = LocalContext.current
     val current = remember { AppLocale.tag(context) }
+    val uiLocale = LocalConfiguration.current.locales[0]
+    val systemLocale = remember { Resources.getSystem().configuration.locales[0] }
     AppCard {
         Text(stringResource(R.string.language_title), style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.height(8.dp))
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Spacer(Modifier.height(4.dp))
+        Column(modifier = Modifier.selectableGroup()) {
             for (tag in AppLocale.SUPPORTED) {
-                QuickChip(languageName(tag), tag == current) {
-                    if (tag != current) {
-                        AppLocale.save(context, tag)
-                        activity?.recreate()
+                val selected = tag == current
+                val title = if (tag.isEmpty()) stringResource(R.string.language_system) else nativeName(Locale.forLanguageTag(tag))
+                val subtitle = if (tag.isEmpty()) {
+                    nativeName(systemLocale)
+                } else {
+                    displayName(Locale.forLanguageTag(tag), uiLocale).takeIf { it != title }
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 56.dp)
+                        .selectable(selected = selected, role = Role.RadioButton) {
+                            if (!selected) {
+                                AppLocale.save(context, tag)
+                                activity?.recreate()
+                            }
+                        },
+                ) {
+                    RadioButton(selected = selected, onClick = null)
+                    Spacer(Modifier.width(16.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(title, style = MaterialTheme.typography.bodyLarge)
+                        if (subtitle != null) {
+                            Text(
+                                subtitle,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    if (selected) {
+                        Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                     }
                 }
             }
@@ -683,14 +797,10 @@ private fun LanguageCard() {
     }
 }
 
-/** Each language is named in itself, so it can be found from any language. */
-@Composable
-private fun languageName(tag: String): String = when (tag) {
-    "ru" -> "Русский"
-    "be" -> "Беларуская"
-    "en" -> "English"
-    else -> stringResource(R.string.language_system)
-}
+private fun nativeName(locale: Locale): String = displayName(locale, locale)
+
+private fun displayName(locale: Locale, inLocale: Locale): String =
+    locale.getDisplayLanguage(inLocale).replaceFirstChar { it.titlecase(inLocale) }
 
 @Composable
 private fun AboutLine(title: String, value: String) {

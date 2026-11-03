@@ -351,6 +351,8 @@
     <string name="network_invalid_password">Пароль: ад 8 да 63 сімвалаў</string>
     <string name="network_invalid_token">Токен: да 64 лацінскіх літар, лічбаў і знакаў, без прабелаў</string>
 
+    <string name="developer_title">Налады распрацоўшчыка</string>
+    <string name="developer_hint">Падключэнне, кропка доступу, распіноўка і скід</string>
     <string name="language_title">Мова</string>
     <string name="language_system">Як у сістэме</string>
 
