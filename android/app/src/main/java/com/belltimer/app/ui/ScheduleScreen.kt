@@ -1355,7 +1355,7 @@ private fun AutoWindowDialog(window: AutoWindow, onDismiss: () -> Unit, onSave: 
 
 /** "С: 1 сентября 2026  [×]" with a tap to change. */
 @Composable
-fun DateRow(label: String, date: LocalDate?, onPick: () -> Unit, onClear: () -> Unit) {
+fun DateRow(label: String, date: LocalDate?, onPick: () -> Unit, onClear: (() -> Unit)?) {
     Surface(
         onClick = onPick,
         shape = MaterialTheme.shapes.medium,
@@ -1372,7 +1372,7 @@ fun DateRow(label: String, date: LocalDate?, onPick: () -> Unit, onClear: () -> 
                     style = MaterialTheme.typography.bodyLarge,
                 )
             }
-            if (date != null) {
+            if (date != null && onClear != null) {
                 IconButton(onClick = onClear) {
                     Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.clear))
                 }

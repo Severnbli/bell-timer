@@ -17,10 +17,23 @@ const val MIN_RING_SECONDS = 1
 const val MAX_RING_SECONDS = 60
 
 /** Schedule document version written by this app. */
-const val SCHEDULE_VERSION = 5
+const val SCHEDULE_VERSION = 6
 
 /** Device API level that understands schedule version 5 (modules). */
 const val API_MODULES = 5
+
+/**
+ * Device API level with firmware updates over Wi-Fi, the wiring settings, the
+ * local-only access point and several date ranges per pack.
+ */
+const val API_UPDATES = 6
+
+/**
+ * Oldest firmware this app can drive. The release workflow copies it into
+ * app.json, so an app update is not suggested to a phone whose device runs
+ * older firmware. Raise it whenever the app stops supporting a firmware.
+ */
+const val MIN_FIRMWARE_VERSION = "2.0.0"
 
 data class AppSettings(
     val baseUrl: String = DEFAULT_BASE_URL,
@@ -54,9 +67,12 @@ data class DeviceStatus(
     val api: Int,
     /** Access point name; null on firmware before the network settings. */
     val ssid: String? = null,
+    /** Oldest app the firmware supports; null on firmware before API 6. */
+    val minApp: String? = null,
 ) {
     val isAuto: Boolean get() = mode == "auto"
     val supportsModules: Boolean get() = api >= API_MODULES
+    val supportsUpdates: Boolean get() = api >= API_UPDATES
 }
 
 /**
@@ -118,6 +134,7 @@ data class StatusDto(
     val ssid: String? = null,
     /** API level of the firmware; absent on the oldest builds, which speak level 2. */
     val api: Int = 2,
+    @SerialName("min_app") val minApp: String? = null,
 )
 
 @Serializable
@@ -143,13 +160,22 @@ data class SchedulePackDto(
     val kind: String = "base",
     val enabled: Boolean = true,
     val mute: Boolean = false,
+    /** Version 5: the single range. Version 6 writes it when there is one range. */
     val from: String? = null,
     val to: String? = null,
+    /** Version 6: several ranges. */
+    val ranges: List<DateRangeDto>? = null,
     val dates: List<String> = emptyList(),
     val yearly: Boolean = false,
     val modules: List<ModuleDto>? = null,
     /** Version 4 entries, read-only on decode. */
     val entries: List<LegacyEntryDto>? = null,
+)
+
+@Serializable
+data class DateRangeDto(
+    val from: String? = null,
+    val to: String? = null,
 )
 
 @Serializable
@@ -196,6 +222,10 @@ data class NetworkDto(
     val channel: Int = 0,
     val open: Boolean = false,
     @SerialName("token_set") val tokenSet: Boolean = false,
+    /** Null on firmware before API 6, which always announces a gateway. */
+    @SerialName("local_only") val localOnly: Boolean? = null,
+    /** A local-only switch waits for a client to come back before it is stored. */
+    @SerialName("local_only_trial") val localOnlyTrial: Boolean = false,
 )
 
 /** Only the fields that are not null are changed on the device. */
@@ -204,7 +234,32 @@ data class NetworkUpdateDto(
     val ssid: String? = null,
     val password: String? = null,
     val token: String? = null,
+    @SerialName("local_only") val localOnly: Boolean? = null,
 )
+
+/** GPIO wiring stored on the device (API 6). */
+@Serializable
+data class DeviceConfigDto(
+    val relay: Int = 26,
+    @SerialName("led_green") val ledGreen: Int = 27,
+    @SerialName("led_red") val ledRed: Int = 25,
+    val sda: Int = 21,
+    val scl: Int = 22,
+    @SerialName("led_active_low") val ledActiveLow: Boolean = false,
+    /** Read-only: the stored wiring could not be used, defaults are active. */
+    val error: Boolean = false,
+) {
+    val pins: List<Int> get() = listOf(relay, ledGreen, ledRed, sda, scl)
+
+    /** Mirrors validDeviceConfig() in the firmware. */
+    val isValid: Boolean get() = pins.all { it in OUTPUT_PINS } && pins.toSet().size == pins.size
+
+    companion object {
+        /** GPIOs that can drive an output and are not flash, UART or input-only. */
+        val OUTPUT_PINS: Set<Int> =
+            setOf(0, 2, 4, 5, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33)
+    }
+}
 
 @Serializable
 data class ResetRequest(val network: Boolean)
@@ -225,6 +280,8 @@ data class ApiResponse(
     /** POST /network and /reset: the access point restarts shortly. */
     val restart: Boolean? = null,
     val ssid: String? = null,
+    @SerialName("local_only") val localOnly: Boolean? = null,
+    @SerialName("local_only_trial") val localOnlyTrial: Boolean? = null,
 )
 
 // ------------------------------- Mapping -----------------------------------
@@ -244,6 +301,7 @@ fun StatusDto.toDomain(): DeviceStatus = DeviceStatus(
     fw = fw,
     api = api,
     ssid = ssid,
+    minApp = minApp,
 )
 
 private fun NextBellDto.toDomain(): DeviceNextBell? {
@@ -276,13 +334,18 @@ private fun SchedulePackDto.toDomain(used: MutableSet<Int>): SchedulePack {
         enabled = enabled,
         mute = kind == PackKind.Correction && mute,
         window = PackWindow(
-            from = parseIsoDate(from),
-            to = parseIsoDate(to),
+            ranges = decodeRanges(),
             dates = dates.mapNotNull(::parseIsoDate).toSet(),
             yearly = yearly,
         ),
         modules = decoded.sortedModules(),
     )
+}
+
+/** "ranges" wins over the version 5 "from"/"to"; empty ranges are dropped. */
+private fun SchedulePackDto.decodeRanges(): List<DateRange> {
+    val raw = ranges ?: listOf(DateRangeDto(from, to))
+    return raw.map { DateRange(parseIsoDate(it.from), parseIsoDate(it.to)) }.filter { it.isSet }
 }
 
 private fun ModuleDto.toDomain(): ScheduleModule? {
@@ -328,8 +391,12 @@ fun BellSchedule.toDto(): ScheduleDto = ScheduleDto(
             kind = pack.kind.wireName,
             enabled = pack.enabled,
             mute = pack.kind == PackKind.Correction && pack.mute,
-            from = pack.window.from?.toString(),
-            to = pack.window.to?.toString(),
+            // One range keeps the version 5 shape, readable by any firmware.
+            from = pack.window.ranges.singleOrNull()?.from?.toString(),
+            to = pack.window.ranges.singleOrNull()?.to?.toString(),
+            ranges = pack.window.ranges
+                .takeIf { it.size > 1 }
+                ?.map { DateRangeDto(it.from?.toString(), it.to?.toString()) },
             dates = pack.window.dates.sorted().map { it.toString() },
             yearly = pack.window.yearly,
             modules = pack.modules.sortedModules().map { it.toDto() },

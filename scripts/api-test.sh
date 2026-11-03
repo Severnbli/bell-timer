@@ -35,6 +35,11 @@ request() {
         -H "Accept: application/json"
         "${AUTH[@]}"
     )
+    # The firmware accepts changes only as JSON, so every POST carries a
+    # JSON body, an empty object when there is nothing to send.
+    if [[ "${method}" == "POST" && -z "${body}" ]]; then
+        body='{}'
+    fi
     if [[ -n "${body}" ]]; then
         args+=(--data-binary "${body}" -H "Content-Type: application/json; charset=utf-8")
     fi
@@ -121,8 +126,9 @@ code="$(request GET /status "" "${WORK_DIR}/status.json")"
 expect_code 200 "${code}" "GET /status" "${WORK_DIR}/status.json"
 expect_contains "${WORK_DIR}/status.json" '"rtc_ok"' "status contains rtc_ok"
 expect_contains "${WORK_DIR}/status.json" '"errors"' "status contains errors"
-expect_contains "${WORK_DIR}/status.json" '"fw":"2.0.0"' "status contains firmware version"
-expect_contains "${WORK_DIR}/status.json" '"api":5' "status reports API level 5"
+expect_contains "${WORK_DIR}/status.json" '"fw":"' "status contains firmware version"
+expect_contains "${WORK_DIR}/status.json" '"api":6' "status reports API level 6"
+expect_contains "${WORK_DIR}/status.json" '"min_app":"' "status reports the oldest supported app"
 expect_contains "${WORK_DIR}/status.json" '"next"' "status contains the next bell"
 expect_contains "${WORK_DIR}/status.json" '"synced"' "status contains the last sync time"
 
@@ -137,14 +143,29 @@ code="$(request GET /settings "" "${WORK_DIR}/original_settings.json")"
 expect_code 200 "${code}" "GET /settings" "${WORK_DIR}/original_settings.json"
 expect_contains "${WORK_DIR}/original_settings.json" '"ring_default"' "settings contains ring_default"
 
-# --- CORS preflight -------------------------------------------------------
-preflight="$(curl -sS --max-time 8 -D - -o /dev/null -X OPTIONS "${BASE_URL}/status")"
-if ! grep -qi '^Access-Control-Allow-Origin: \*' <<<"${preflight}"; then
-    echo "FAIL: OPTIONS /status did not return Access-Control-Allow-Origin" >&2
+# --- Cross-origin protection ---------------------------------------------
+# Web pages must not be able to drive the bell: no CORS headers, and a POST
+# that a page could send without a preflight (text/plain) is refused.
+headers="$(curl -sS --max-time 8 -D - -o /dev/null "${AUTH[@]}" "${BASE_URL}/status")"
+if grep -qi '^Access-Control-Allow-Origin' <<<"${headers}"; then
+    echo "FAIL: GET /status must not send Access-Control-Allow-Origin" >&2
     exit 1
 fi
 PASS_COUNT=$((PASS_COUNT + 1))
-echo "PASS: OPTIONS /status returns CORS headers"
+echo "PASS: no CORS headers"
+
+plain_code="$(curl -sS --max-time 8 -o "${WORK_DIR}/plain.json" -w "%{http_code}" "${AUTH[@]}" \
+    -X POST -H "Content-Type: text/plain" --data-binary '{"sec":1}' "${BASE_URL}/ring")"
+expect_code 415 "${plain_code}" "POST /ring as text/plain is refused" "${WORK_DIR}/plain.json"
+expect_contains "${WORK_DIR}/plain.json" '"error":"json_required"' "json_required error code"
+
+# --- Wiring ---------------------------------------------------------------
+code="$(request GET /device "" "${WORK_DIR}/device.json")"
+expect_code 200 "${code}" "GET /device" "${WORK_DIR}/device.json"
+expect_contains "${WORK_DIR}/device.json" '"relay"' "device reports the relay pin"
+code="$(request POST /device '{"relay":7}' "${WORK_DIR}/device_bad.json")"
+expect_code 400 "${code}" "POST /device rejects a flash pin" "${WORK_DIR}/device_bad.json"
+expect_contains "${WORK_DIR}/device_bad.json" '"error":"invalid_pins"' "invalid_pins error code"
 
 if [[ -n "${TOKEN}" ]]; then
     unauth_code="$(curl -sS --max-time 8 -o "${WORK_DIR}/unauth.json" -w "%{http_code}" \
@@ -224,7 +245,7 @@ expect_contains "${WORK_DIR}/schedule_post.json" '"packs":4' "pack count is repo
 
 code="$(request GET /schedule "" "${WORK_DIR}/schedule_after.json")"
 expect_code 200 "${code}" "GET /schedule after save" "${WORK_DIR}/schedule_after.json"
-expect_contains "${WORK_DIR}/schedule_after.json" '"version":5' "schedule is returned as version 5"
+expect_contains "${WORK_DIR}/schedule_after.json" '"version":6' "schedule is returned as version 6"
 expect_contains "${WORK_DIR}/schedule_after.json" '"label":"1 урок"' "saved UTF-8 label is returned"
 expect_contains "${WORK_DIR}/schedule_after.json" '"type":"lesson","time":"08:00","length":45,"pre":2' "lesson fields are returned"
 expect_contains "${WORK_DIR}/schedule_after.json" '"until":"16:00","every":60' "series fields are returned"
@@ -262,6 +283,17 @@ expect_code 200 "${code}" "POST /schedule v4 is migrated" "${WORK_DIR}/schedule_
 code="$(request GET /schedule "" "${WORK_DIR}/schedule_v4_get.json")"
 expect_contains "${WORK_DIR}/schedule_v4_get.json" '"type":"lesson","time":"08:30","length":45' "v4 pair becomes a lesson"
 expect_contains "${WORK_DIR}/schedule_v4_get.json" '"days":[1,2,3,4,5,6,7]' "omitted days default to Monday-Sunday"
+
+# Version 6: a pack valid in two separate ranges (two terms of a school year).
+V6_SCHEDULE='{"version":6,"packs":[{"id":1,"name":"Четверти","ranges":[{"from":"2027-01-11","to":"2027-03-20"},{"from":"2027-04-01","to":"2027-05-31"}],"modules":[{"type":"bell","time":"08:00"}]}]}'
+code="$(request POST /schedule "${V6_SCHEDULE}" "${WORK_DIR}/schedule_v6.json")"
+expect_code 200 "${code}" "POST /schedule v6 with two ranges" "${WORK_DIR}/schedule_v6.json"
+code="$(request GET /schedule "" "${WORK_DIR}/schedule_v6_get.json")"
+expect_contains "${WORK_DIR}/schedule_v6_get.json" '"ranges":[{"from":"2027-01-11","to":"2027-03-20"},{"from":"2027-04-01","to":"2027-05-31"}]' "both ranges are returned"
+code="$(request GET "/schedule/day?date=2027-03-25" "" "${WORK_DIR}/day_gap.json")"
+expect_contains "${WORK_DIR}/day_gap.json" '"bells":[]' "no bells between the ranges"
+code="$(request GET "/schedule/day?date=2027-04-05" "" "${WORK_DIR}/day_second.json")"
+expect_contains "${WORK_DIR}/day_second.json" '"time":"08:00"' "bells inside the second range"
 
 for bad in \
     '{"packs":[{"modules":[{"type":"lesson","time":"23:30","length":45}]}]}' \

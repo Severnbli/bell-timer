@@ -146,9 +146,9 @@ fun driftText(seconds: Long): String {
 fun windowSummary(window: PackWindow): String {
     if (!window.isSet) return stringResource(R.string.window_always)
     val parts = mutableListOf<String>()
-    if (window.hasRange) {
-        val from = window.from?.let { if (window.yearly) it.shortDate() else it.fullDate() }
-        val to = window.to?.let { if (window.yearly) it.shortDate() else it.fullDate() }
+    for (range in window.ranges) {
+        val from = range.from?.let { if (window.yearly) it.shortDate() else it.fullDate() }
+        val to = range.to?.let { if (window.yearly) it.shortDate() else it.fullDate() }
         parts += when {
             from != null && to != null -> "$from – $to"
             from != null -> stringResource(R.string.window_from, from)
@@ -182,6 +182,8 @@ fun deviceErrorLabel(code: String): String = when (code) {
     "time_not_set" -> stringResource(R.string.device_error_time_not_set)
     "storage_error" -> stringResource(R.string.device_error_storage)
     "wifi_ap_error" -> stringResource(R.string.device_error_wifi_ap)
+    "network_config_error" -> stringResource(R.string.device_error_network_config)
+    "device_config_error" -> stringResource(R.string.device_error_device_config)
     else -> stringResource(R.string.device_error_unknown, code)
 }
 

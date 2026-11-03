@@ -11,7 +11,17 @@ import com.belltimer.app.data.BuiltInTemplates
 import com.belltimer.app.data.LessonTemplate
 import com.belltimer.app.data.TemplateStore
 import com.belltimer.app.data.DEFAULT_RING_SECONDS
+import com.belltimer.app.data.AppRelease
+import com.belltimer.app.data.DeviceConfigDto
 import com.belltimer.app.data.DeviceStatus
+import com.belltimer.app.data.FirmwareRelease
+import com.belltimer.app.data.FirmwareStore
+import com.belltimer.app.data.MIN_FIRMWARE_VERSION
+import com.belltimer.app.data.StoredFirmware
+import com.belltimer.app.data.UpdateClient
+import com.belltimer.app.data.UpdateException
+import com.belltimer.app.data.isNewer
+import com.belltimer.app.data.meetsMinimum
 import com.belltimer.app.data.MAX_RING_SECONDS
 import com.belltimer.app.data.NetworkDto
 import com.belltimer.app.data.NetworkUpdateDto
@@ -25,8 +35,10 @@ import com.belltimer.app.data.toDto
 import com.belltimer.app.data.validate
 import com.belltimer.app.data.withinDeviceLimits
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.map
@@ -42,6 +54,43 @@ import java.time.format.DateTimeFormatter
 import kotlin.math.abs
 
 enum class ConnectionState { Connecting, Online, Offline }
+
+enum class InstallPhase { Idle, Uploading, Restarting }
+
+/** Releases found on GitHub and the progress of a firmware update. */
+data class UpdatesState(
+    val checking: Boolean = false,
+    val checked: Boolean = false,
+    val error: String? = null,
+    val app: AppRelease? = null,
+    val firmware: FirmwareRelease? = null,
+    /** A verified firmware image kept on the phone. */
+    val stored: StoredFirmware? = null,
+    /** 0..1 while a firmware image downloads, null otherwise. */
+    val downloadProgress: Float? = null,
+    val installPhase: InstallPhase = InstallPhase.Idle,
+    val installProgress: Float = 0f,
+    val installTarget: String? = null,
+)
+
+/** Version of this app, as built (for example "1.5.0"). */
+val APP_VERSION: String get() = BuildConfig.VERSION_NAME
+
+/** What stands between the phone, the device and the newest releases. */
+data class Compatibility(
+    /** A newer app is published. */
+    val appUpdate: AppRelease?,
+    /** That newer app would not drive the firmware on the device. */
+    val appUpdateNeedsFirmware: String?,
+    /** A newer firmware than the device runs is published. */
+    val firmwareUpdate: FirmwareRelease?,
+    /** That firmware needs a newer app than this one. */
+    val firmwareNeedsApp: String?,
+    /** The device firmware needs a newer app than this one. */
+    val deviceNeedsApp: String?,
+    /** The device firmware is older than this app supports. */
+    val deviceTooOld: Boolean,
+)
 
 data class UiState(
     val settings: AppSettings = AppSettings(),
@@ -63,7 +112,25 @@ data class UiState(
     val scheduleIssue: ScheduleIssue? = null,
     /** Access point settings read from the device; null until loaded. */
     val network: NetworkDto? = null,
+    /** Wiring read from the device; null until loaded or before API 6. */
+    val device: DeviceConfigDto? = null,
+    val updates: UpdatesState = UpdatesState(),
 ) {
+    val compatibility: Compatibility
+        get() {
+            val fw = status?.fw?.takeIf { it.isNotBlank() }
+            val app = updates.app?.takeIf { isNewer(it.version, APP_VERSION) }
+            val firmware = updates.firmware?.takeIf { fw != null && isNewer(it.version, fw) }
+            return Compatibility(
+                appUpdate = app,
+                appUpdateNeedsFirmware = app?.minFirmware?.takeIf { fw != null && !meetsMinimum(fw, it) },
+                firmwareUpdate = firmware,
+                firmwareNeedsApp = firmware?.minApp?.takeIf { !meetsMinimum(APP_VERSION, it) },
+                deviceNeedsApp = status?.minApp?.takeIf { !meetsMinimum(APP_VERSION, it) },
+                deviceTooOld = fw != null && !meetsMinimum(fw, MIN_FIRMWARE_VERSION),
+            )
+        }
+
     val online: Boolean get() = connection == ConnectionState.Online
 
     /** The device clock, advanced locally between two status polls. */
@@ -88,6 +155,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val store = SettingsStore(application)
     private val api = ApiClient(application)
+    private val updateClient = UpdateClient(application)
+    private val firmwareStore = FirmwareStore(application)
     private val initialSettings = store.load()
 
     private val _state = MutableStateFlow(UiState(settings = initialSettings))
@@ -107,8 +176,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private var lastAutoSyncAt = 0L
     private var savingSettings = false
 
+    /** The device is busy writing flash; status polls would only time out. */
+    @Volatile
+    private var pollPaused = false
+
     init {
         api.updateSettings(initialSettings)
+        viewModelScope.launch {
+            val stored = withContext(Dispatchers.IO) { firmwareStore.load() }
+            _state.update { it.copy(updates = it.updates.copy(stored = stored)) }
+        }
+        checkForUpdates(userInitiated = false)
     }
 
     /** Messages follow the language chosen in the app, not only the system one. */
@@ -124,7 +202,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 _state.update { it.copy(connection = ConnectionState.Connecting) }
             }
             while (isActive) {
-                refreshStatus()
+                if (!pollPaused) refreshStatus()
                 delay(POLL_INTERVAL_MS)
             }
         }
@@ -555,8 +633,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      * or turns the token off. When the token changes, the app switches to it
      * right away so it keeps access.
      */
-    fun saveNetwork(ssid: String, password: String?, token: String?) = action {
-        val response = api.saveNetwork(NetworkUpdateDto(ssid = ssid.trim(), password = password, token = token))
+    fun saveNetwork(ssid: String, password: String?, token: String?, localOnly: Boolean? = null) = action {
+        val response = api.saveNetwork(
+            NetworkUpdateDto(ssid = ssid.trim(), password = password, token = token, localOnly = localOnly),
+        )
         if (!response.ok) throw ApiException.Http(400, response.error ?: "invalid_request")
         if (token != null) {
             val updated = _state.value.settings.copy(token = token)
@@ -571,14 +651,198 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     ssid = response.ssid ?: ssid,
                     open = if (password != null) password.isEmpty() else it.network.open,
                     tokenSet = if (token != null) token.isNotEmpty() else it.network.tokenSet,
+                    localOnly = response.localOnly ?: it.network.localOnly,
+                    localOnlyTrial = response.localOnlyTrial ?: it.network.localOnlyTrial,
                 ),
-                message = if (restart) {
-                    text(R.string.network_saved_restart, response.ssid ?: ssid)
-                } else {
-                    text(R.string.network_saved)
+                message = when {
+                    restart && response.localOnlyTrial == true ->
+                        text(R.string.network_saved_trial, response.ssid ?: ssid)
+                    restart -> text(R.string.network_saved_restart, response.ssid ?: ssid)
+                    else -> text(R.string.network_saved)
                 },
             )
         }
+    }
+
+    // ------------------------------- Wiring ------------------------------
+
+    fun loadDevice() {
+        if (_state.value.status?.supportsUpdates != true) return
+        viewModelScope.launch {
+            try {
+                val device = api.getDevice()
+                _state.update { it.copy(device = device) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+                // The card stays hidden until the next attempt.
+            }
+        }
+    }
+
+    /** Stores new wiring; the device restarts to apply it. */
+    fun saveDevice(config: DeviceConfigDto) = action {
+        val response = api.saveDevice(config)
+        if (!response.ok) throw ApiException.Http(400, response.error ?: "invalid_pins")
+        _state.update {
+            it.copy(device = config.copy(error = false), message = text(R.string.device_saved))
+        }
+    }
+
+    // ------------------------------- Updates -----------------------------
+
+    /**
+     * Looks for new releases on GitHub. On app start this runs quietly and
+     * only mentions an app update; from the button it always reports back.
+     */
+    fun checkForUpdates(userInitiated: Boolean) {
+        if (_state.value.updates.checking) return
+        viewModelScope.launch {
+            _state.update { it.copy(updates = it.updates.copy(checking = true, error = null)) }
+            try {
+                val latest = updateClient.latest()
+                _state.update {
+                    it.copy(
+                        updates = it.updates.copy(
+                            checking = false,
+                            checked = true,
+                            app = latest.app,
+                            firmware = latest.firmware,
+                        ),
+                    )
+                }
+                val current = _state.value
+                val compatibility = current.compatibility
+                val summary = when {
+                    compatibility.firmwareUpdate != null ->
+                        text(R.string.update_firmware_available, compatibility.firmwareUpdate.version)
+                    compatibility.appUpdate != null ->
+                        text(R.string.update_app_available, compatibility.appUpdate.version)
+                    userInitiated -> text(R.string.update_none)
+                    else -> null
+                }
+                if (summary != null) reportMessage(summary)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                val error = mapUpdateError(e)
+                _state.update { it.copy(updates = it.updates.copy(checking = false, error = error)) }
+                if (userInitiated) reportMessage(error)
+            }
+        }
+    }
+
+    /** Downloads the newest firmware to the phone and verifies its checksum. */
+    fun downloadFirmware() {
+        val release = _state.value.updates.firmware ?: return
+        if (_state.value.updates.downloadProgress != null) return
+        viewModelScope.launch {
+            _state.update { it.copy(updates = it.updates.copy(downloadProgress = 0f)) }
+            try {
+                updateClient.download(release, firmwareStore.downloadTarget(release)) { progress ->
+                    _state.update { it.copy(updates = it.updates.copy(downloadProgress = progress)) }
+                }
+                val stored = withContext(Dispatchers.IO) { firmwareStore.save(release) }
+                _state.update {
+                    it.copy(
+                        updates = it.updates.copy(downloadProgress = null, stored = stored),
+                        message = text(R.string.update_downloaded, release.version),
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                _state.update {
+                    it.copy(updates = it.updates.copy(downloadProgress = null), message = mapUpdateError(e))
+                }
+            }
+        }
+    }
+
+    /**
+     * Sends the stored firmware to the device, then waits for it to come
+     * back with the new version. The device keeps its schedule and settings.
+     */
+    fun installFirmware() {
+        val current = _state.value
+        val stored = current.updates.stored ?: return
+        val status = current.status
+        if (current.updates.installPhase != InstallPhase.Idle || !current.online || status == null) return
+        if (!status.supportsUpdates) {
+            reportMessage(text(R.string.update_needs_usb))
+            return
+        }
+        if (!meetsMinimum(APP_VERSION, stored.release.minApp)) {
+            reportMessage(text(R.string.update_firmware_needs_app, stored.release.minApp.orEmpty()))
+            return
+        }
+        viewModelScope.launch {
+            pollPaused = true
+            _state.update {
+                it.copy(
+                    updates = it.updates.copy(
+                        installPhase = InstallPhase.Uploading,
+                        installProgress = 0f,
+                        installTarget = stored.release.version,
+                    ),
+                )
+            }
+            try {
+                val response = api.uploadFirmware(stored.file, stored.release.md5) { progress ->
+                    _state.update { it.copy(updates = it.updates.copy(installProgress = progress)) }
+                }
+                if (!response.ok) throw ApiException.Http(500, response.error ?: "invalid_image")
+                _state.update { it.copy(updates = it.updates.copy(installPhase = InstallPhase.Restarting)) }
+                pollPaused = false
+                val version = waitForFirmware(stored.release.version)
+                _state.update {
+                    it.copy(
+                        updates = it.updates.copy(installPhase = InstallPhase.Idle, installTarget = null),
+                        message = if (version == stored.release.version) {
+                            text(R.string.update_installed, version)
+                        } else {
+                            text(R.string.update_not_confirmed)
+                        },
+                    )
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                _state.update {
+                    it.copy(
+                        updates = it.updates.copy(installPhase = InstallPhase.Idle, installTarget = null),
+                        message = mapError(e),
+                    )
+                }
+            } finally {
+                pollPaused = false
+            }
+        }
+    }
+
+    /** Polls until the device reports [target] or the restart takes too long. */
+    private suspend fun waitForFirmware(target: String): String? {
+        val deadline = System.currentTimeMillis() + RESTART_TIMEOUT_MS
+        // Give the device time to answer, restart and bring the network back.
+        delay(RESTART_GRACE_MS)
+        while (System.currentTimeMillis() < deadline) {
+            val status = runCatching { api.getStatus().toDomain() }.getOrNull()
+            if (status != null) {
+                applyStatus(status)
+                if (status.fw == target) return status.fw
+            }
+            delay(POLL_INTERVAL_MS)
+        }
+        return _state.value.status?.fw
+    }
+
+    private fun mapUpdateError(e: Throwable): String = when (e) {
+        is UpdateException.NoInternet -> text(R.string.update_error_no_internet)
+        is UpdateException.ChecksumMismatch -> text(R.string.update_error_checksum)
+        is UpdateException.InvalidManifest -> text(R.string.update_error_manifest)
+        is UpdateException.Http -> text(R.string.update_error_http, e.code)
+        is UpdateException.Network -> text(R.string.update_error_network)
+        else -> text(R.string.error_unexpected, e.message ?: e.javaClass.simpleName)
     }
 
     fun clearMessage() {
@@ -601,6 +865,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         is ScheduleIssue.TooManyPacks -> text(R.string.error_too_many_packs)
         is ScheduleIssue.TooManyPackModules -> text(R.string.error_too_many_pack_modules)
         is ScheduleIssue.TooManyPackDates -> text(R.string.error_too_many_pack_dates)
+        is ScheduleIssue.TooManyPackRanges -> text(R.string.error_too_many_pack_ranges)
+        is ScheduleIssue.RangesNeedFirmware -> text(R.string.issue_ranges_need_firmware)
         is ScheduleIssue.InvalidModule -> text(R.string.issue_invalid_module)
         is ScheduleIssue.FirmwareTooOld -> text(R.string.issue_firmware_too_old)
     }
@@ -632,6 +898,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             "too_many_modules", "too_many_pack_modules" -> text(R.string.error_too_many_pack_modules)
             "too_many_packs" -> text(R.string.error_too_many_packs)
             "too_many_pack_dates" -> text(R.string.error_too_many_pack_dates)
+            "too_many_pack_ranges" -> text(R.string.error_too_many_pack_ranges)
             "invalid_ring_default" -> text(R.string.settings_invalid_duration)
             "invalid_json" -> text(R.string.error_invalid_json)
             "storage_error" -> text(R.string.error_storage_device)
@@ -640,6 +907,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             "invalid_ssid" -> text(R.string.network_invalid_ssid)
             "invalid_password" -> text(R.string.network_invalid_password)
             "invalid_token" -> text(R.string.network_invalid_token)
+            "too_many_attempts" -> text(R.string.error_too_many_attempts)
+            "json_required" -> text(R.string.error_json_required)
+            "invalid_pins" -> text(R.string.device_invalid_pins)
+            "token_required" -> text(R.string.update_error_token_required)
+            "md5_mismatch", "invalid_image", "invalid_md5", "invalid_size" ->
+                text(R.string.update_error_image)
+            "upload_aborted", "no_firmware" -> text(R.string.update_error_aborted)
+            "update_begin_failed", "update_write_failed" -> text(R.string.update_error_flash)
             else -> if (e.code >= 500) {
                 text(R.string.error_http, e.code)
             } else {
@@ -662,6 +937,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private companion object {
         const val POLL_INTERVAL_MS = 2_000L
+        const val RESTART_GRACE_MS = 5_000L
+        const val RESTART_TIMEOUT_MS = 120_000L
         const val AUTO_SYNC_INTERVAL_MS = 10 * 60_000L
         const val AUTO_SYNC_DRIFT_SEC = 60L
         val API_DATE_TIME_FORMAT: DateTimeFormatter =

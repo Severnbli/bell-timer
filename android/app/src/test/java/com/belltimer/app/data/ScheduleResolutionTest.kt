@@ -155,10 +155,29 @@ class ScheduleResolutionTest {
 
     @Test
     fun yearlyRangeWrapsOverNewYear() {
-        val window = PackWindow(from = LocalDate.of(2026, 12, 25), to = LocalDate.of(2027, 1, 8), yearly = true)
+        val window = PackWindow(
+            ranges = listOf(DateRange(LocalDate.of(2026, 12, 25), LocalDate.of(2027, 1, 8))),
+            yearly = true,
+        )
         assertTrue(window.allows(LocalDate.of(2030, 1, 3)))
         assertTrue(window.allows(LocalDate.of(2030, 12, 31)))
         assertFalse(window.allows(LocalDate.of(2030, 2, 1)))
+    }
+
+    @Test
+    fun severalRangesLeaveGapsBetweenThem() {
+        val window = PackWindow(
+            ranges = listOf(
+                DateRange(LocalDate.of(2026, 9, 1), LocalDate.of(2026, 10, 25)),
+                DateRange(LocalDate.of(2026, 11, 3), LocalDate.of(2026, 12, 24)),
+            ),
+        )
+        assertTrue(window.allows(LocalDate.of(2026, 10, 1)))
+        assertFalse(window.allows(LocalDate.of(2026, 10, 30)))
+        assertTrue(window.allows(LocalDate.of(2026, 11, 3)))
+        assertFalse(window.allows(LocalDate.of(2026, 12, 25)))
+        assertTrue(window.isValid)
+        assertFalse(window.copy(ranges = List(MAX_PACK_RANGES + 1) { window.ranges[0] }).isValid)
     }
 
     @Test
@@ -232,7 +251,7 @@ class ScheduleResolutionTest {
 
     @Test
     fun addingAndRemovingSingleDates() {
-        val window = PackWindow(from = LocalDate.of(2026, 9, 1), to = LocalDate.of(2026, 9, 30))
+        val window = PackWindow(ranges = listOf(DateRange(LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 30))))
         val added = window.withDate(monday)
         assertTrue(added.hasDate(monday))
         assertTrue(added.allows(monday))

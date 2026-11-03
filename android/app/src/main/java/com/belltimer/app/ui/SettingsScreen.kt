@@ -50,11 +50,21 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.ui.platform.LocalUriHandler
+import com.belltimer.app.APP_VERSION
 import com.belltimer.app.AppViewModel
+import com.belltimer.app.InstallPhase
 import com.belltimer.app.R
 import com.belltimer.app.UiState
+import com.belltimer.app.data.DeviceConfigDto
 import com.belltimer.app.data.MAX_RING_SECONDS
 import com.belltimer.app.data.MIN_RING_SECONDS
+import com.belltimer.app.data.isNewer
+import com.belltimer.app.data.meetsMinimum
 import kotlin.math.roundToInt
 
 /** The slider covers the usual durations; longer ones are typed in. */
@@ -73,8 +83,11 @@ fun SettingsScreen(state: UiState, viewModel: AppViewModel) {
     var customText by rememberSaveable(settings.ringDefault) { mutableStateOf(settings.ringDefault.toString()) }
     var confirmReset by remember { mutableStateOf(false) }
 
-    LaunchedEffect(state.online) {
-        if (state.online) viewModel.loadNetwork()
+    LaunchedEffect(state.online, state.status?.api) {
+        if (state.online) {
+            viewModel.loadNetwork()
+            viewModel.loadDevice()
+        }
     }
 
     val customSeconds = customText.toIntOrNull()?.takeIf { it in MIN_RING_SECONDS..MAX_RING_SECONDS }
@@ -194,6 +207,12 @@ fun SettingsScreen(state: UiState, viewModel: AppViewModel) {
             NetworkCard(state = state, onSave = viewModel::saveNetwork)
         }
 
+        UpdatesCard(state = state, viewModel = viewModel)
+
+        if (state.online && state.device != null) {
+            DeviceCard(device = state.device, busy = state.busy, onSave = viewModel::saveDevice)
+        }
+
         LanguageCard()
 
         AppCard {
@@ -272,7 +291,7 @@ private fun ResetDialog(onConfirm: (Boolean) -> Unit, onDismiss: () -> Unit) {
 
 /** Access point name, password and API token stored on the device. */
 @Composable
-private fun NetworkCard(state: UiState, onSave: (String, String?, String?) -> Unit) {
+private fun NetworkCard(state: UiState, onSave: (String, String?, String?, Boolean?) -> Unit) {
     val network = state.network ?: return
     var ssid by rememberSaveable(network.ssid) { mutableStateOf(network.ssid) }
     var password by rememberSaveable { mutableStateOf("") }
@@ -280,6 +299,7 @@ private fun NetworkCard(state: UiState, onSave: (String, String?, String?) -> Un
     var showPassword by remember { mutableStateOf(false) }
     var token by rememberSaveable { mutableStateOf("") }
     var noToken by rememberSaveable(network.tokenSet) { mutableStateOf(!network.tokenSet) }
+    var localOnly by rememberSaveable(network.localOnly) { mutableStateOf(network.localOnly == true) }
     var confirm by remember { mutableStateOf(false) }
 
     val ssidError = ssid.isBlank() || ssid.toByteArray(Charsets.UTF_8).size > 32
@@ -300,7 +320,8 @@ private fun NetworkCard(state: UiState, onSave: (String, String?, String?) -> Un
         else -> null
     }
     val ssidChanged = ssid.trim() != network.ssid
-    val changed = ssidChanged || newPassword != null || newToken != null
+    val newLocalOnly = localOnly.takeIf { network.localOnly != null && it != network.localOnly }
+    val changed = ssidChanged || newPassword != null || newToken != null || newLocalOnly != null
     val valid = !ssidError && !passwordError && !passwordMissing && !tokenError && !tokenMissing
 
     AppCard {
@@ -359,6 +380,17 @@ private fun NetworkCard(state: UiState, onSave: (String, String?, String?) -> Un
                 modifier = Modifier.fillMaxWidth(),
             )
         }
+        if (network.localOnly != null) {
+            ThinDivider()
+            SettingRow(
+                title = stringResource(R.string.network_local_only),
+                subtitle = stringResource(
+                    if (network.localOnlyTrial) R.string.network_local_only_trial else R.string.network_local_only_hint,
+                ),
+                onClick = { localOnly = !localOnly },
+                trailing = { Switch(checked = localOnly, onCheckedChange = { localOnly = it }) },
+            )
+        }
         ThinDivider()
         SettingRow(
             title = stringResource(R.string.network_no_token),
@@ -389,20 +421,240 @@ private fun NetworkCard(state: UiState, onSave: (String, String?, String?) -> Un
     }
 
     if (confirm) {
-        val restart = ssidChanged || newPassword != null
+        val restart = ssidChanged || newPassword != null || newLocalOnly != null
         ConfirmDialog(
             title = stringResource(R.string.network_confirm_title),
-            text = if (restart) {
-                stringResource(R.string.network_confirm_restart, ssid.trim())
-            } else {
-                stringResource(R.string.network_confirm_token)
+            text = when {
+                newLocalOnly != null -> stringResource(R.string.network_confirm_local_only, ssid.trim())
+                restart -> stringResource(R.string.network_confirm_restart, ssid.trim())
+                else -> stringResource(R.string.network_confirm_token)
             },
             confirm = stringResource(R.string.network_apply),
             onConfirm = {
-                onSave(ssid.trim(), newPassword, newToken)
+                onSave(ssid.trim(), newPassword, newToken, newLocalOnly)
                 password = ""
                 token = ""
             },
+            onDismiss = { confirm = false },
+        )
+    }
+}
+
+/** New app and firmware releases, and installing firmware on the device. */
+@Composable
+private fun UpdatesCard(state: UiState, viewModel: AppViewModel) {
+    val uriHandler = LocalUriHandler.current
+    val updates = state.updates
+    val compatibility = state.compatibility
+    val status = state.status
+    var confirmInstall by remember { mutableStateOf(false) }
+
+    AppCard {
+        Text(stringResource(R.string.update_title), style = MaterialTheme.typography.titleMedium)
+
+        // App
+        AboutLine(
+            stringResource(R.string.settings_app_version),
+            updates.app?.let {
+                if (compatibility.appUpdate != null) {
+                    stringResource(R.string.update_version_arrow, APP_VERSION, it.version)
+                } else {
+                    stringResource(R.string.update_version_current, APP_VERSION)
+                }
+            } ?: APP_VERSION,
+        )
+        compatibility.appUpdate?.let { app ->
+            compatibility.appUpdateNeedsFirmware?.let {
+                UpdateNote(stringResource(R.string.update_app_needs_firmware, it), error = true)
+            }
+            OutlinedButton(onClick = { uriHandler.openUri(app.pageUrl) }, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.update_open_app_page, app.version))
+            }
+        }
+        ThinDivider()
+
+        // Firmware
+        val deviceFw = status?.fw?.takeIf { it.isNotBlank() }
+        val latestFw = updates.firmware
+        AboutLine(
+            stringResource(R.string.settings_fw_version),
+            when {
+                deviceFw != null && latestFw != null && isNewer(latestFw.version, deviceFw) ->
+                    stringResource(R.string.update_version_arrow, deviceFw, latestFw.version)
+                deviceFw != null -> deviceFw
+                latestFw != null -> stringResource(R.string.update_latest, latestFw.version)
+                else -> stringResource(R.string.unknown)
+            },
+        )
+        val stored = updates.stored?.takeIf { deviceFw == null || isNewer(it.release.version, deviceFw) }
+        // The firmware the card offers: one already on the phone, else the newest release.
+        val candidate = stored?.release ?: latestFw?.takeIf { deviceFw == null || isNewer(it.version, deviceFw) }
+        val needsApp = candidate?.minApp?.takeIf { !meetsMinimum(APP_VERSION, it) }
+        when {
+            updates.installPhase != InstallPhase.Idle -> {
+                Text(
+                    stringResource(
+                        if (updates.installPhase == InstallPhase.Uploading) R.string.update_uploading else R.string.update_restarting,
+                        updates.installTarget.orEmpty(),
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                if (updates.installPhase == InstallPhase.Uploading) {
+                    LinearProgressIndicator(progress = { updates.installProgress }, modifier = Modifier.fillMaxWidth())
+                } else {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+            }
+            needsApp != null -> UpdateNote(stringResource(R.string.update_firmware_needs_app, needsApp), error = true)
+            stored != null -> {
+                when {
+                    status == null || !state.online -> UpdateNote(stringResource(R.string.update_ready_connect, stored.release.version))
+                    !status.supportsUpdates -> UpdateNote(stringResource(R.string.update_needs_usb), error = true)
+                    state.network?.tokenSet == false -> UpdateNote(stringResource(R.string.update_error_token_required), error = true)
+                }
+                Button(
+                    onClick = { confirmInstall = true },
+                    enabled = state.online && status?.supportsUpdates == true && state.network?.tokenSet != false && !state.busy,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Default.SystemUpdate, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.update_install, stored.release.version))
+                }
+            }
+            latestFw != null && (deviceFw == null || isNewer(latestFw.version, deviceFw)) -> {
+                val progress = updates.downloadProgress
+                if (progress != null) {
+                    LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+                } else {
+                    OutlinedButton(onClick = viewModel::downloadFirmware, modifier = Modifier.fillMaxWidth()) {
+                        Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.update_download, latestFw.version))
+                    }
+                }
+            }
+        }
+        ThinDivider()
+
+        updates.error?.let { UpdateNote(it, error = true) }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = stringResource(
+                    when {
+                        updates.checking -> R.string.update_checking
+                        updates.checked -> R.string.update_checked
+                        else -> R.string.update_not_checked
+                    },
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = { viewModel.checkForUpdates(userInitiated = true) }, enabled = !updates.checking) {
+                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(stringResource(R.string.update_check))
+            }
+        }
+    }
+
+    if (confirmInstall) {
+        val version = updates.stored?.release?.version.orEmpty()
+        ConfirmDialog(
+            title = stringResource(R.string.update_confirm_title, version),
+            text = stringResource(R.string.update_confirm_text),
+            confirm = stringResource(R.string.update_install_short),
+            onConfirm = viewModel::installFirmware,
+            onDismiss = { confirmInstall = false },
+        )
+    }
+}
+
+@Composable
+private fun UpdateNote(text: String, error: Boolean = false) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = if (error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(vertical = 4.dp),
+    )
+}
+
+/** GPIO wiring of the relay, the LED and the clock, stored on the device. */
+@Composable
+private fun DeviceCard(device: DeviceConfigDto, busy: Boolean, onSave: (DeviceConfigDto) -> Unit) {
+    var relay by rememberSaveable(device) { mutableStateOf(device.relay.toString()) }
+    var green by rememberSaveable(device) { mutableStateOf(device.ledGreen.toString()) }
+    var red by rememberSaveable(device) { mutableStateOf(device.ledRed.toString()) }
+    var sda by rememberSaveable(device) { mutableStateOf(device.sda.toString()) }
+    var scl by rememberSaveable(device) { mutableStateOf(device.scl.toString()) }
+    var activeLow by rememberSaveable(device) { mutableStateOf(device.ledActiveLow) }
+    var confirm by remember { mutableStateOf(false) }
+
+    val edited = DeviceConfigDto(
+        relay = relay.toIntOrNull() ?: -1,
+        ledGreen = green.toIntOrNull() ?: -1,
+        ledRed = red.toIntOrNull() ?: -1,
+        sda = sda.toIntOrNull() ?: -1,
+        scl = scl.toIntOrNull() ?: -1,
+        ledActiveLow = activeLow,
+    )
+    val changed = edited != device.copy(error = false)
+
+    AppCard {
+        Text(stringResource(R.string.device_title), style = MaterialTheme.typography.titleMedium)
+        Text(
+            stringResource(R.string.device_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (device.error) UpdateNote(stringResource(R.string.device_stored_error), error = true)
+        Spacer(Modifier.height(8.dp))
+        val fields = listOf(
+            Triple(R.string.device_relay, relay) { v: String -> relay = v },
+            Triple(R.string.device_led_green, green) { v: String -> green = v },
+            Triple(R.string.device_led_red, red) { v: String -> red = v },
+            Triple(R.string.device_sda, sda) { v: String -> sda = v },
+            Triple(R.string.device_scl, scl) { v: String -> scl = v },
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            for ((label, value, set) in fields) {
+                val pin = value.toIntOrNull()
+                OutlinedTextField(
+                    value = value,
+                    onValueChange = { text -> set(text.filter { it.isDigit() }.take(2)) },
+                    label = { Text(stringResource(label)) },
+                    prefix = { Text("GPIO") },
+                    isError = pin == null || pin !in DeviceConfigDto.OUTPUT_PINS,
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.width(150.dp),
+                )
+            }
+        }
+        SettingRow(
+            title = stringResource(R.string.device_led_active_low),
+            subtitle = stringResource(R.string.device_led_active_low_hint),
+            onClick = { activeLow = !activeLow },
+            trailing = { Switch(checked = activeLow, onCheckedChange = { activeLow = it }) },
+        )
+        if (!edited.isValid) UpdateNote(stringResource(R.string.device_invalid_pins), error = true)
+        Button(
+            onClick = { confirm = true },
+            enabled = changed && edited.isValid && !busy,
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text(stringResource(R.string.network_apply)) }
+    }
+
+    if (confirm) {
+        ConfirmDialog(
+            title = stringResource(R.string.device_confirm_title),
+            text = stringResource(R.string.device_confirm_text),
+            confirm = stringResource(R.string.network_apply),
+            onConfirm = { onSave(edited) },
             onDismiss = { confirm = false },
         )
     }

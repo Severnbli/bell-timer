@@ -20,7 +20,7 @@ class ScheduleCodecTest {
             SchedulePack(
                 id = 1,
                 name = "Будни",
-                window = PackWindow(from = LocalDate.of(2026, 9, 1), to = LocalDate.of(2027, 5, 31)),
+                window = PackWindow(ranges = listOf(DateRange(LocalDate.of(2026, 9, 1), LocalDate.of(2027, 5, 31)))),
                 modules = listOf(
                     ScheduleModule(type = ModuleType.Lesson, start = 8 * 60, length = 45, pre = 2, label = "1 урок"),
                     ScheduleModule(type = ModuleType.Bell, start = 12 * 60, days = ALL_DAYS, label = "Обед"),
@@ -52,7 +52,7 @@ class ScheduleCodecTest {
     @Test
     fun encodesOnlyTheFieldsOfEachType() {
         val root = Json.parseToJsonElement(ScheduleCodec.encode(sample)).jsonObject
-        assertEquals("5", root["version"]!!.jsonPrimitive.content)
+        assertEquals("6", root["version"]!!.jsonPrimitive.content)
         val modules = root["packs"]!!.jsonArray[0].jsonObject["modules"]!!.jsonArray
         val lesson = modules[0].jsonObject
         assertEquals("lesson", lesson["type"]!!.jsonPrimitive.content)
@@ -65,6 +65,36 @@ class ScheduleCodecTest {
         assertEquals("17:00", series["until"]!!.jsonPrimitive.content)
         assertEquals("60", series["every"]!!.jsonPrimitive.content)
         assertTrue(root["packs"]!!.jsonArray[1].jsonObject["mute"]!!.jsonPrimitive.content.toBoolean())
+    }
+
+    @Test
+    fun oneRangeKeepsTheVersion5Shape() {
+        val pack = Json.parseToJsonElement(ScheduleCodec.encode(sample)).jsonObject["packs"]!!.jsonArray[0].jsonObject
+        assertEquals("2026-09-01", pack["from"]!!.jsonPrimitive.content)
+        assertEquals("2027-05-31", pack["to"]!!.jsonPrimitive.content)
+        assertNull(pack["ranges"])
+    }
+
+    @Test
+    fun severalRangesRoundTrip() {
+        val ranges = listOf(
+            DateRange(LocalDate.of(2026, 9, 1), LocalDate.of(2026, 10, 25)),
+            DateRange(LocalDate.of(2026, 11, 3), LocalDate.of(2026, 12, 24)),
+            DateRange(from = LocalDate.of(2027, 1, 12)),
+        )
+        val schedule = BellSchedule(packs = listOf(SchedulePack(id = 1, window = PackWindow(ranges = ranges))))
+        val text = ScheduleCodec.encode(schedule)
+        val pack = Json.parseToJsonElement(text).jsonObject["packs"]!!.jsonArray[0].jsonObject
+        assertNull(pack["from"])
+        assertEquals(3, pack["ranges"]!!.jsonArray.size)
+        assertEquals(ranges, ScheduleCodec.decode(text).packs.single().window.ranges)
+    }
+
+    @Test
+    fun version5RangeIsRead() {
+        val v5 = """{"version":5,"packs":[{"id":1,"from":"2026-09-01","to":"2026-12-31","modules":[]}]}"""
+        val window = ScheduleCodec.decode(v5).packs.single().window
+        assertEquals(listOf(DateRange(LocalDate.of(2026, 9, 1), LocalDate.of(2026, 12, 31))), window.ranges)
     }
 
     @Test

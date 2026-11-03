@@ -7,6 +7,7 @@ import java.time.LocalDateTime
 const val MAX_PACKS = 8
 const val MAX_PACK_MODULES = 32
 const val MAX_PACK_DATES = 24
+const val MAX_PACK_RANGES = 8
 const val MAX_MODULES = MAX_PACKS * MAX_PACK_MODULES
 const val MAX_LABEL_BYTES = 32
 const val MAX_PACK_NAME_BYTES = 32
@@ -135,30 +136,20 @@ enum class PackKind(val wireName: String) {
 }
 
 /**
- * When a pack is allowed to run. [from] and [to] form a date range, [dates]
- * lists individual dates, and [yearly] compares month and day instead of the
- * full date (so a range may wrap over New Year).
+ * One validity range of a pack. Either side may be open, but not both. In a
+ * yearly window only month and day count, so a range may wrap over New Year.
  */
-data class PackWindow(
+data class DateRange(
     val from: LocalDate? = null,
     val to: LocalDate? = null,
-    val dates: Set<LocalDate> = emptySet(),
-    val yearly: Boolean = false,
 ) {
-    val hasRange: Boolean get() = from != null || to != null
+    val isSet: Boolean get() = from != null || to != null
 
-    val isSet: Boolean get() = hasRange || dates.isNotEmpty()
+    fun isValid(yearly: Boolean): Boolean =
+        isSet && (yearly || from == null || to == null || !to.isBefore(from))
 
-    val isValid: Boolean
-        get() = yearly || from == null || to == null || !to.isBefore(from)
-
-    fun allows(date: LocalDate): Boolean {
-        if (!isSet) return true
-        if (hasRange && inRange(date)) return true
-        return dates.any { matches(it, date) }
-    }
-
-    private fun inRange(date: LocalDate): Boolean {
+    fun covers(date: LocalDate, yearly: Boolean): Boolean {
+        if (!isSet) return false
         if (!yearly) {
             if (from != null && date.isBefore(from)) return false
             if (to != null && date.isAfter(to)) return false
@@ -175,6 +166,32 @@ data class PackWindow(
             else -> false
         }
     }
+}
+
+private fun monthDay(date: LocalDate): Int = date.monthValue * 100 + date.dayOfMonth
+
+/**
+ * When a pack is allowed to run: any of its date [ranges] or one of its
+ * individual [dates]. [yearly] compares month and day instead of the full
+ * date. A window with neither ranges nor dates allows every day.
+ */
+data class PackWindow(
+    val ranges: List<DateRange> = emptyList(),
+    val dates: Set<LocalDate> = emptySet(),
+    val yearly: Boolean = false,
+) {
+    val hasRange: Boolean get() = ranges.isNotEmpty()
+
+    val isSet: Boolean get() = hasRange || dates.isNotEmpty()
+
+    val isValid: Boolean
+        get() = ranges.size <= MAX_PACK_RANGES && ranges.all { it.isValid(yearly) }
+
+    fun allows(date: LocalDate): Boolean {
+        if (!isSet) return true
+        if (rangeCovers(date)) return true
+        return hasDate(date)
+    }
 
     private fun matches(expected: LocalDate, date: LocalDate): Boolean =
         if (yearly) monthDay(expected) == monthDay(date) else expected == date
@@ -182,14 +199,12 @@ data class PackWindow(
     /** Whether [date] is one of the individual dates (by day and month when yearly). */
     fun hasDate(date: LocalDate): Boolean = dates.any { matches(it, date) }
 
-    /** Whether the date range alone (not the individual dates) covers [date]. */
-    fun rangeCovers(date: LocalDate): Boolean = hasRange && inRange(date)
+    /** Whether one of the ranges (not the individual dates) covers [date]. */
+    fun rangeCovers(date: LocalDate): Boolean = ranges.any { it.covers(date, yearly) }
 
     fun withDate(date: LocalDate): PackWindow = if (hasDate(date)) this else copy(dates = dates + date)
 
     fun withoutDate(date: LocalDate): PackWindow = copy(dates = dates.filterNot { matches(it, date) }.toSet())
-
-    private fun monthDay(date: LocalDate): Int = date.monthValue * 100 + date.dayOfMonth
 }
 
 /**
@@ -312,7 +327,7 @@ data class BellSchedule(
 
     /**
      * The single source of truth for what rings on a date. The firmware applies
-     * exactly the same rules (collectDayBells(), docs/firmware-api-v5.md):
+     * exactly the same rules (collectDayBells(), docs/firmware-api.md):
      *
      * Packs are walked top to bottom. A base pack adds the bells of its modules
      * for this weekday. A correction applies when it is muted or has a module

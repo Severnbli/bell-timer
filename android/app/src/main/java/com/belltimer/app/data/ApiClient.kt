@@ -10,10 +10,15 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSink
+import java.io.File
 import java.io.IOException
 import java.io.InterruptedIOException
 import java.util.Collections
@@ -110,19 +115,72 @@ class ApiClient(context: Context) {
     suspend fun saveNetwork(request: NetworkUpdateDto): ApiResponse =
         decode(read("POST", "/network", json.encodeToString(request)))
 
+    suspend fun getDevice(): DeviceConfigDto = decode(read("GET", "/device"))
+
+    suspend fun saveDevice(config: DeviceConfigDto): ApiResponse =
+        decode(read("POST", "/device", json.encodeToString(config.copy(error = false))))
+
+    /**
+     * Sends a firmware image to POST /update. The device checks [md5] before
+     * it switches to the new image and restarts after the response.
+     */
+    suspend fun uploadFirmware(file: File, md5: String, onProgress: (Float) -> Unit): ApiResponse =
+        withContext(Dispatchers.IO) {
+            val network = findWifiNetwork() ?: throw ApiException.NoWifi()
+            val baseUrl = settings.baseUrl.trim().trimEnd('/')
+            val size = file.length()
+            val body = MultipartBody.Builder()
+                .setType(MultipartBody.FORM)
+                .addFormDataPart("firmware", "firmware.bin", ProgressBody(file, FIRMWARE_MEDIA_TYPE, onProgress))
+                .build()
+            val request = Request.Builder()
+                .url("$baseUrl/update?md5=$md5&size=$size")
+                .post(body)
+                .header("Accept", "application/json")
+                .apply {
+                    val token = settings.token.trim()
+                    if (token.isNotEmpty()) header("X-Token", token)
+                }
+                .build()
+            // Writing flash is slow: allow minutes instead of seconds.
+            val client = clientFor(network).newBuilder()
+                .writeTimeout(60, TimeUnit.SECONDS)
+                .readTimeout(60, TimeUnit.SECONDS)
+                .callTimeout(5, TimeUnit.MINUTES)
+                .build()
+            try {
+                client.newCall(request).execute().use { response ->
+                    val text = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) {
+                        throw ApiException.Http(response.code, parseErrorCode(text) ?: "http_${response.code}")
+                    }
+                    decode<ApiResponse>(text)
+                }
+            } catch (e: ApiException) {
+                throw e
+            } catch (e: InterruptedIOException) {
+                throw ApiException.Timeout(e)
+            } catch (e: IOException) {
+                throw ApiException.Network(e)
+            }
+        }
+
     fun hasWifiTransport(): Boolean = findWifiNetwork() != null
 
     private suspend fun read(method: String, path: String, body: String? = null): String =
         withContext(Dispatchers.IO) {
             val network = findWifiNetwork() ?: throw ApiException.NoWifi()
             val baseUrl = settings.baseUrl.trim().trimEnd('/')
-            val requestBody = body?.toRequestBody(JSON_MEDIA_TYPE)
+            // The firmware takes changes only as JSON, so a POST without
+            // fields still sends an empty JSON object.
+            val payload = body ?: if (method == "POST") "{}" else null
+            val requestBody = payload?.toRequestBody(JSON_MEDIA_TYPE)
             val request = Request.Builder()
                 .url("$baseUrl$path")
                 .method(method, requestBody)
                 .header("Accept", "application/json")
                 .apply {
-                    if (!body.isNullOrEmpty()) {
+                    if (!payload.isNullOrEmpty()) {
                         header("Content-Type", "application/json; charset=utf-8")
                     }
                     val token = settings.token.trim()
@@ -193,5 +251,32 @@ class ApiClient(context: Context) {
 
     private companion object {
         val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+        val FIRMWARE_MEDIA_TYPE = "application/octet-stream".toMediaType()
+    }
+}
+
+/** Streams a file and reports how much of it was sent. */
+private class ProgressBody(
+    private val file: File,
+    private val type: MediaType,
+    private val onProgress: (Float) -> Unit,
+) : RequestBody() {
+    override fun contentType(): MediaType = type
+
+    override fun contentLength(): Long = file.length()
+
+    override fun writeTo(sink: BufferedSink) {
+        val total = file.length().coerceAtLeast(1)
+        var sent = 0L
+        file.inputStream().use { input ->
+            val buffer = ByteArray(8 * 1024)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                sink.write(buffer, 0, read)
+                sent += read
+                onProgress((sent.toFloat() / total).coerceIn(0f, 1f))
+            }
+        }
     }
 }
