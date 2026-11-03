@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
@@ -29,6 +30,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -42,6 +44,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.belltimer.app.AppViewModel
+import com.belltimer.app.InstallPhase
 import com.belltimer.app.R
 
 private enum class Tab(val title: Int, val icon: ImageVector, val selectedIcon: ImageVector) {
@@ -81,6 +84,27 @@ fun BellTimerApp(viewModel: AppViewModel) {
                 viewModel.consumeScheduleIssue()
             }
         }
+    }
+
+    // A newer app or firmware asks once per start; "Later" hides it until an
+    // even newer release turns up. Firmware is known only once the device answers.
+    val compatibility = state.compatibility
+    val updateKey = listOfNotNull(
+        compatibility.appUpdate?.let { "app ${it.version}" },
+        compatibility.firmwareUpdate?.let { "fw ${it.version}" },
+    ).joinToString(" ")
+    var dismissedUpdate by rememberSaveable { mutableStateOf("") }
+    if (updateKey.isNotEmpty() && updateKey != dismissedUpdate && state.updates.installPhase == InstallPhase.Idle) {
+        UpdateDialog(
+            appVersion = compatibility.appUpdate?.version,
+            firmwareVersion = compatibility.firmwareUpdate?.version,
+            onOpen = {
+                dismissedUpdate = updateKey
+                editingPackId = NO_PACK
+                tab = Tab.Settings
+            },
+            onLater = { dismissedUpdate = updateKey },
+        )
     }
 
     // A pack that disappeared (undo, reload) closes its editor.
@@ -152,6 +176,29 @@ fun BellTimerApp(viewModel: AppViewModel) {
             }
         }
     }
+}
+
+@Composable
+private fun UpdateDialog(
+    appVersion: String?,
+    firmwareVersion: String?,
+    onOpen: () -> Unit,
+    onLater: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onLater,
+        title = { Text(stringResource(R.string.update_dialog_title)) },
+        text = {
+            Text(
+                listOfNotNull(
+                    appVersion?.let { stringResource(R.string.update_app_available, it) },
+                    firmwareVersion?.let { stringResource(R.string.update_firmware_available, it) },
+                ).joinToString("\n") + "\n\n" + stringResource(R.string.update_dialog_text),
+            )
+        },
+        confirmButton = { TextButton(onClick = onOpen) { Text(stringResource(R.string.open)) } },
+        dismissButton = { TextButton(onClick = onLater) { Text(stringResource(R.string.later)) } },
+    )
 }
 
 private const val NO_PACK = -1

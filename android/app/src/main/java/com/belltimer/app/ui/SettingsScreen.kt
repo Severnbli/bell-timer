@@ -187,21 +187,7 @@ private fun GeneralSettingsScreen(state: UiState, viewModel: AppViewModel, onOpe
 
         LanguageCard()
 
-        UpdatesCard(state = state, viewModel = viewModel)
-
-        AppCard {
-            Text(stringResource(R.string.settings_about_title), style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(4.dp))
-            val status = state.status
-            AboutLine(stringResource(R.string.settings_app_version), appVersionName())
-            AboutLine(
-                stringResource(R.string.settings_fw_version),
-                status?.let { "${it.fw} · API ${it.api}" } ?: stringResource(R.string.unknown),
-            )
-            status?.let {
-                AboutLine(stringResource(R.string.settings_modules), it.modules.toString())
-            }
-        }
+        AboutCard(state = state, viewModel = viewModel)
 
         AppCard {
             SettingRow(
@@ -519,9 +505,9 @@ private fun NetworkCard(state: UiState, onSave: (String, String?, String?, Boole
     }
 }
 
-/** New app and firmware releases, and installing firmware on the device. */
+/** Versions of the app and the device, their updates and installing firmware. */
 @Composable
-private fun UpdatesCard(state: UiState, viewModel: AppViewModel) {
+private fun AboutCard(state: UiState, viewModel: AppViewModel) {
     val uriHandler = LocalUriHandler.current
     val updates = state.updates
     val compatibility = state.compatibility
@@ -529,18 +515,19 @@ private fun UpdatesCard(state: UiState, viewModel: AppViewModel) {
     var confirmInstall by remember { mutableStateOf(false) }
 
     AppCard {
-        Text(stringResource(R.string.update_title), style = MaterialTheme.typography.titleMedium)
+        Text(stringResource(R.string.settings_about_title), style = MaterialTheme.typography.titleMedium)
 
         // App
+        val appVersion = appVersionName().ifBlank { APP_VERSION }
         AboutLine(
             stringResource(R.string.settings_app_version),
             updates.app?.let {
                 if (compatibility.appUpdate != null) {
-                    stringResource(R.string.update_version_arrow, APP_VERSION, it.version)
+                    stringResource(R.string.update_version_arrow, appVersion, it.version)
                 } else {
-                    stringResource(R.string.update_version_current, APP_VERSION)
+                    stringResource(R.string.update_version_current, appVersion)
                 }
-            } ?: APP_VERSION,
+            } ?: appVersion,
         )
         compatibility.appUpdate?.let { app ->
             compatibility.appUpdateNeedsFirmware?.let {
@@ -568,6 +555,10 @@ private fun UpdatesCard(state: UiState, viewModel: AppViewModel) {
                 else -> stringResource(R.string.unknown)
             },
         )
+        status?.let {
+            AboutLine("API", it.api.toString())
+            AboutLine(stringResource(R.string.settings_modules), it.modules.toString())
+        }
         val stored = updates.stored?.takeIf { deviceFw == null || isNewer(it.release.version, deviceFw) }
         // The firmware the card offers: one already on the phone, else the newest release.
         val candidate = stored?.release ?: latestFw?.takeIf { deviceFw == null || isNewer(it.version, deviceFw) }

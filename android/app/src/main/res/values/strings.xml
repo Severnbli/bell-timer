@@ -16,6 +16,7 @@
     <string name="clear">Сбросить</string>
     <string name="change">Изменить</string>
     <string name="undo">Вернуть</string>
+    <string name="later">Позже</string>
     <string name="open">Открыть</string>
     <string name="back">Назад</string>
     <string name="more">Ещё</string>
@@ -413,7 +414,8 @@
     <string name="issue_ranges_need_firmware">Несколько диапазонов дат требуют прошивку 2.1.0 или новее</string>
     <string name="device_error_network_config">Сохранённые настройки сети повреждены, работают заводские. Сохраните сеть заново.</string>
     <string name="device_error_device_config">Сохранённая распиновка повреждена, работает заводская. Сохраните её заново.</string>
-    <string name="update_title">Обновления</string>
+    <string name="update_dialog_title">Доступно обновление</string>
+    <string name="update_dialog_text">Скачать и установить его можно в «Настройки → О системе».</string>
     <string name="update_version_arrow">%1$s → %2$s</string>
     <string name="update_version_current">%1$s, актуальная</string>
     <string name="update_latest">последняя %1$s</string>
@@ -423,7 +425,7 @@
     <string name="update_not_checked">Ещё не проверялось</string>
     <string name="update_none">Обновлений нет</string>
     <string name="update_app_available">Доступна новая версия приложения %1$s</string>
-    <string name="update_firmware_available">Доступна прошивка %1$s – откройте «Настройки → Обновления»</string>
+    <string name="update_firmware_available">Доступна прошивка %1$s</string>
     <string name="update_firmware_banner">Доступна прошивка %1$s. Установить можно в настройках.</string>
     <string name="update_open_app_page">Скачать приложение %1$s</string>
     <string name="update_app_needs_firmware">Новому приложению нужна прошивка %1$s или новее: сначала обновите прошивку.</string>

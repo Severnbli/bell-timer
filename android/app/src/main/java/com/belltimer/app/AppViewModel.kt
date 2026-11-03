@@ -692,8 +692,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     // ------------------------------- Updates -----------------------------
 
     /**
-     * Looks for new releases on GitHub. On app start this runs quietly and
-     * only mentions an app update; from the button it always reports back.
+     * Looks for new releases on GitHub. On app start this runs quietly (the
+     * update dialog shows what it found); from the button it always reports back.
      */
     fun checkForUpdates(userInitiated: Boolean) {
         if (_state.value.updates.checking) return
@@ -713,13 +713,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 val current = _state.value
                 val compatibility = current.compatibility
-                val summary = when {
+                // On start the update dialog (BellTimerApp) tells about updates.
+                val summary = if (!userInitiated) null else when {
                     compatibility.firmwareUpdate != null ->
                         text(R.string.update_firmware_available, compatibility.firmwareUpdate.version)
                     compatibility.appUpdate != null ->
                         text(R.string.update_app_available, compatibility.appUpdate.version)
-                    userInitiated -> text(R.string.update_none)
-                    else -> null
+                    else -> text(R.string.update_none)
                 }
                 if (summary != null) reportMessage(summary)
             } catch (e: CancellationException) {
