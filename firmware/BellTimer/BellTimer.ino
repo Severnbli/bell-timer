@@ -1,6 +1,6 @@
 // BellTimer - programmable bell timer for ESP32.
 //
-// Hardware:
+// Hardware (default wiring; the pins in use are kept in /device.json):
 //   GPIO21/22 - DS3231 RTC (I2C, address 0x68, stores LOCAL time)
 //   GPIO26    - relay input, ACTIVE LOW (LOW = relay on)
 //   GPIO27    - KY-029 "G" pin (green die)
@@ -16,6 +16,9 @@
 #include <Wire.h>
 #include <RTClib.h>
 #include <ArduinoJson.h>
+#include <Update.h>
+#include <esp_netif.h>
+#include <dhcpserver/dhcpserver.h>
 
 // Deployment settings (Wi-Fi credentials, API token, GPIO wiring) come from
 // .env. scripts/build-firmware.sh renders them into this header; it is
@@ -26,33 +29,52 @@
 #error "app_config.h is missing: copy .env.example to .env and run scripts/build-firmware.sh."
 #endif
 
+// The release workflow sets the version through FW_VERSION in the environment;
+// local builds fall back to this one.
+#ifndef BELLTIMER_FW_VERSION
+#define BELLTIMER_FW_VERSION "2.1.0"
+#endif
+
 namespace {
 
-const char *const FW_VERSION = "2.0.0";
+const char *const FW_VERSION = BELLTIMER_FW_VERSION;
+
+// Oldest Android app that can drive this firmware. GET /status reports it and
+// the release workflow copies it into firmware.json, so the app refuses to
+// install a firmware it could not control afterwards. Raise it whenever a
+// change needs a newer app.
+const char *const MIN_APP_VERSION = "1.5.0";
 
 // API level reported by GET /status. Level 5 replaces the raw entries of a
-// pack with typed modules (bell, lesson, series).
-const uint8_t API_VERSION = 5;
+// pack with typed modules (bell, lesson, series). Level 6 adds firmware
+// updates (POST /update), the wiring settings (/device), the local-only access
+// point and several date ranges per pack.
+const uint8_t API_VERSION = 6;
 
 // ----------------------------- Configuration ------------------------------
 
-// Build-time defaults. The app can change the access point name, password and
-// API token at run time (POST /network); they are kept in /network.json.
+// Build-time defaults. They are used only on a device that has never stored
+// its own values: on the first boot the firmware copies them into
+// /network.json and /device.json and reads those files from then on, so a
+// firmware built with other defaults (for example a release build) never
+// changes the settings of a device that already runs.
 const char *const DEFAULT_AP_SSID = BELLTIMER_AP_SSID;
 const char *const DEFAULT_AP_PASSWORD = BELLTIMER_AP_PASSWORD;
 const char *const DEFAULT_API_TOKEN = BELLTIMER_API_TOKEN;  // Empty disables X-Token.
-const uint8_t AP_CHANNEL = BELLTIMER_AP_CHANNEL;
-const uint8_t AP_MAX_CLIENTS = BELLTIMER_AP_MAX_CLIENTS;
+const uint8_t DEFAULT_AP_CHANNEL = BELLTIMER_AP_CHANNEL;
+const uint8_t DEFAULT_AP_MAX_CLIENTS = BELLTIMER_AP_MAX_CLIENTS;
 
-const uint8_t PIN_RELAY = BELLTIMER_PIN_RELAY;
-const uint8_t PIN_LED_GREEN = BELLTIMER_PIN_LED_GREEN;  // KY-029 "G" pin
-const uint8_t PIN_LED_RED = BELLTIMER_PIN_LED_RED;      // KY-029 "R" pin
 // The KY-029 exists in a common-cathode and a common-anode variant. With the
 // common pin tied to GND the dies are lit by a HIGH level; with the common pin
 // tied to 3V3 they are lit by a LOW level. See LED_ACTIVE_LOW in .env.
-const bool LED_ACTIVE_LOW = BELLTIMER_LED_ACTIVE_LOW;
-const uint8_t PIN_I2C_SDA = BELLTIMER_PIN_I2C_SDA;
-const uint8_t PIN_I2C_SCL = BELLTIMER_PIN_I2C_SCL;
+struct DeviceConfig {
+  uint8_t relay = BELLTIMER_PIN_RELAY;
+  uint8_t ledGreen = BELLTIMER_PIN_LED_GREEN;  // KY-029 "G" pin
+  uint8_t ledRed = BELLTIMER_PIN_LED_RED;      // KY-029 "R" pin
+  uint8_t sda = BELLTIMER_PIN_I2C_SDA;
+  uint8_t scl = BELLTIMER_PIN_I2C_SCL;
+  bool ledActiveLow = BELLTIMER_LED_ACTIVE_LOW;
+};
 
 // A schedule is an ordered list of packs ("пачки"). A pack holds modules; a
 // module expands into one or more bells (a lesson rings at its start and its
@@ -70,6 +92,7 @@ const uint8_t PIN_I2C_SCL = BELLTIMER_PIN_I2C_SCL;
 const size_t MAX_PACKS = 8;            // ordered packs
 const size_t MAX_PACK_MODULES = 32;    // modules inside one pack
 const size_t MAX_PACK_DATES = 24;      // individual dates inside one pack
+const size_t MAX_PACK_RANGES = 8;      // from/to date ranges inside one pack
 const size_t MAX_MODULES = MAX_PACKS * MAX_PACK_MODULES;
 const size_t MAX_LABEL_BYTES = 32;     // About 10 Cyrillic characters in UTF-8.
 const size_t MAX_PACK_NAME_BYTES = 32;
@@ -93,6 +116,10 @@ const uint8_t ALL_DAYS_MASK = 0x7F;    // bit 0 = Monday ... bit 6 = Sunday
 const char *const SCHEDULE_FILE = "/schedule.json";
 const char *const SETTINGS_FILE = "/settings.json";
 const char *const NETWORK_FILE = "/network.json";
+const char *const DEVICE_FILE = "/device.json";
+// Layout version written into every settings file as "v". A newer firmware
+// must keep reading files written by an older one.
+const uint8_t FILE_FORMAT = 1;
 const size_t MAX_SSID_BYTES = 32;
 const size_t MIN_PASSWORD_BYTES = 8;
 const size_t MAX_PASSWORD_BYTES = 63;
@@ -100,6 +127,13 @@ const size_t MAX_TOKEN_BYTES = 64;
 // Delay between answering POST /network and restarting the access point, so
 // the response reaches the phone before its Wi-Fi drops.
 const uint32_t AP_RESTART_DELAY_MS = 1500;
+// Same idea for a full restart after a firmware update or a wiring change.
+const uint32_t REBOOT_DELAY_MS = 1500;
+// A switch of the local-only mode is kept only when a client talks to the
+// device within this time after the access point came back. Otherwise the
+// previous mode returns, so a phone that cannot join the changed network does
+// not lock everyone out.
+const uint32_t LOCAL_ONLY_TRIAL_MS = 180000;
 
 const uint32_t RTC_POLL_MS = 250;
 const uint32_t RTC_RETRY_MS = 2000;
@@ -141,14 +175,21 @@ enum PackKind : uint8_t {
   PACK_CORRECTION = 1,
 };
 
+// One validity range of a pack. A zero key means "no limit" on that side; at
+// least one side is set.
+struct DateRange {
+  uint32_t fromKey = 0;  // YYYYMMDD
+  uint32_t toKey = 0;
+};
+
 struct SchedulePack {
   uint8_t id = 0;
   uint8_t kind = PACK_BASE;
   bool enabled = true;
   bool yearly = false;
   bool mute = false;  // correction that only cancels the packs above (a holiday)
-  uint32_t fromKey = 0;  // YYYYMMDD, 0 = no limit
-  uint32_t toKey = 0;
+  DateRange ranges[MAX_PACK_RANGES];
+  uint8_t rangeCount = 0;
   uint32_t dates[MAX_PACK_DATES];  // 0 = unused
   uint8_t dateCount = 0;
   String name;
@@ -164,11 +205,36 @@ bool rtcOk = false;
 bool rtcLostPower = true;
 bool apOk = false;
 
+// Wiring in use. It is read once at boot; POST /device stores a new one and
+// restarts the device to apply it.
+DeviceConfig device;
+bool deviceConfigError = false;  // /device.json exists but cannot be used
+
 String apSsid = DEFAULT_AP_SSID;
 String apPassword = DEFAULT_AP_PASSWORD;
 String apiToken = DEFAULT_API_TOKEN;
+uint8_t apChannel = DEFAULT_AP_CHANNEL;
+uint8_t apMaxClients = DEFAULT_AP_MAX_CLIENTS;
+// Local-only: the DHCP server announces no gateway, so phones keep using
+// mobile data for the internet while they are joined to the bell. Off by
+// default; the app turns it on with a trial (see LOCAL_ONLY_TRIAL_MS).
+bool apLocalOnly = false;
+bool networkConfigError = false;  // /network.json exists but cannot be used
 bool apRestartPending = false;
 uint32_t apRestartAtMs = 0;
+
+// A local-only switch on trial (see LOCAL_ONLY_TRIAL_MS).
+bool localOnlyTrial = false;
+bool localOnlyPrevious = false;
+uint32_t localOnlyTrialStartMs = 0;
+
+bool rebootPending = false;
+uint32_t rebootAtMs = 0;
+
+// Firmware upload state (POST /update).
+bool updateRunning = false;
+bool updateAuthorized = false;
+const char *updateError = nullptr;
 
 uint8_t ringDefault = DEFAULT_RING_SEC;
 String currentMode = "auto";
@@ -221,22 +287,22 @@ const uint32_t LED_FAULT_BLINK_MS = 250; // red, 2 Hz
 
 // --------------------------- Small helpers --------------------------------
 
-void relayOn() { digitalWrite(PIN_RELAY, LOW); }
-void relayOff() { digitalWrite(PIN_RELAY, HIGH); }
+void relayOn() { digitalWrite(device.relay, LOW); }
+void relayOff() { digitalWrite(device.relay, HIGH); }
 
 // Single point that translates a logical LED state into a pin level, so the
-// common-cathode and common-anode KY-029 variants differ only by a constant.
+// common-cathode and common-anode KY-029 variants differ only by a setting.
 inline void ledWrite(uint8_t pin, bool on) {
-  digitalWrite(pin, on == LED_ACTIVE_LOW ? LOW : HIGH);
+  digitalWrite(pin, on == device.ledActiveLow ? LOW : HIGH);
 }
 
 // Pin level that keeps a die dark, used before pinMode() so the LED never
 // flashes during boot.
-inline uint8_t ledOffLevel() { return LED_ACTIVE_LOW ? HIGH : LOW; }
+inline uint8_t ledOffLevel() { return device.ledActiveLow ? HIGH : LOW; }
 
 void setLed(bool green, bool red) {
-  ledWrite(PIN_LED_GREEN, green);
-  ledWrite(PIN_LED_RED, red);
+  ledWrite(device.ledGreen, green);
+  ledWrite(device.ledRed, red);
 }
 
 String formatDateTime(const DateTime &dt) {
@@ -401,12 +467,12 @@ uint32_t monthDayKey(uint32_t dateKey) {
   return ((dateKey / 100UL) % 100UL) * 100UL + (dateKey % 100UL);
 }
 
-bool rangeAllowsDate(const SchedulePack &pack, uint32_t dateKey) {
-  if (pack.fromKey == 0 && pack.toKey == 0) return false;
-  if (pack.yearly) {
+bool rangeAllowsDate(const DateRange &range, bool yearly, uint32_t dateKey) {
+  if (range.fromKey == 0 && range.toKey == 0) return false;
+  if (yearly) {
     uint32_t value = monthDayKey(dateKey);
-    uint32_t start = pack.fromKey != 0 ? monthDayKey(pack.fromKey) : 0;
-    uint32_t end = pack.toKey != 0 ? monthDayKey(pack.toKey) : 0;
+    uint32_t start = range.fromKey != 0 ? monthDayKey(range.fromKey) : 0;
+    uint32_t end = range.toKey != 0 ? monthDayKey(range.toKey) : 0;
     if (start != 0 && end != 0) {
       if (start > end) return value >= start || value <= end;
       return value >= start && value <= end;
@@ -414,16 +480,18 @@ bool rangeAllowsDate(const SchedulePack &pack, uint32_t dateKey) {
     if (start != 0) return value >= start;
     return value <= end;
   }
-  if (pack.fromKey != 0 && dateKey < pack.fromKey) return false;
-  if (pack.toKey != 0 && dateKey > pack.toKey) return false;
+  if (range.fromKey != 0 && dateKey < range.fromKey) return false;
+  if (range.toKey != 0 && dateKey > range.toKey) return false;
   return true;
 }
 
+// A pack without ranges and dates applies every day; otherwise a date must
+// fall into one of its ranges or be one of its single dates.
 bool packAllowsDate(const SchedulePack &pack, uint32_t dateKey) {
-  bool hasRange = pack.fromKey != 0 || pack.toKey != 0;
-  bool hasDates = pack.dateCount > 0;
-  if (!hasRange && !hasDates) return true;
-  if (hasRange && rangeAllowsDate(pack, dateKey)) return true;
+  if (pack.rangeCount == 0 && pack.dateCount == 0) return true;
+  for (uint8_t i = 0; i < pack.rangeCount; ++i) {
+    if (rangeAllowsDate(pack.ranges[i], pack.yearly, dateKey)) return true;
+  }
   for (uint8_t i = 0; i < pack.dateCount; ++i) {
     if (pack.yearly ? sameMonthDay(pack.dates[i], dateKey) : pack.dates[i] == dateKey) {
       return true;
@@ -499,8 +567,26 @@ String sanitizeMode(const String &value) {
   return "auto";
 }
 
+// Keeps a file the firmware cannot read as "<path>.bad" instead of losing it,
+// for example a schedule written by a newer firmware after a downgrade.
+void setAsideBadFile(const char *path) {
+  String badPath = String(path) + ".bad";
+  if (LittleFS.exists(badPath)) LittleFS.remove(badPath);
+  LittleFS.rename(path, badPath);
+}
+
+// Only damaged content counts as bad; running out of memory while parsing
+// says nothing about the file.
+bool fileContentIsBad(DeserializationError err) {
+  return err == DeserializationError::InvalidInput ||
+         err == DeserializationError::IncompleteInput ||
+         err == DeserializationError::TooDeep ||
+         err == DeserializationError::EmptyInput;
+}
+
 bool saveSettingsToFlash() {
   JsonDocument doc;
+  doc["v"] = FILE_FORMAT;
   doc["ring_default"] = ringDefault;
   doc["mode"] = currentMode;
   if (lastSync.length() > 0) doc["synced"] = lastSync;
@@ -538,13 +624,14 @@ void loadSettingsFromFlash() {
 
 // --------------------------- Schedule document ----------------------------
 //
-// Canonical document (version 5):
+// Canonical document (version 6):
 // {
-//   "version": 5,
+//   "version": 6,
 //   "auto": {"start": "YYYY-MM-DD", "stop": "YYYY-MM-DD"},
 //   "packs": [
 //     {"id": 1, "name": "Будни", "kind": "base", "enabled": true,
-//      "yearly": false, "from": "YYYY-MM-DD", "to": "YYYY-MM-DD",
+//      "yearly": false,
+//      "ranges": [{"from": "YYYY-MM-DD", "to": "YYYY-MM-DD"}, ...],
 //      "dates": ["YYYY-MM-DD"],
 //      "modules": [
 //        {"type": "lesson", "time": "08:00", "length": 45, "pre": 2,
@@ -556,6 +643,8 @@ void loadSettingsFromFlash() {
 //      "dates": ["YYYY-MM-DD"], "modules": []}
 //   ]
 // }
+// A pack with exactly one range is written in the version 5 shape, with "from"
+// and "to" on the pack itself, and version 5 documents are read the same way.
 // Version 4 packs ("entries" with an optional "pair") are migrated in memory:
 // an entry with a pair becomes a lesson, any other entry a bell.
 
@@ -769,10 +858,33 @@ const char *parsePack(JsonObject packObj) {
   if (!parseLabelField(packObj["name"], pack.name, MAX_PACK_NAME_BYTES)) {
     return "invalid_schedule";
   }
-  if (!parseDateField(packObj["from"], pack.fromKey)) return "invalid_schedule";
-  if (!parseDateField(packObj["to"], pack.toKey)) return "invalid_schedule";
-  if (!pack.yearly && pack.fromKey != 0 && pack.toKey != 0 && pack.toKey < pack.fromKey) {
-    return "invalid_schedule";
+  // Version 6 lists the validity ranges in "ranges"; a single "from"/"to"
+  // pair (version 5) is read as one range.
+  JsonVariant rangesValue = packObj["ranges"];
+  if (!rangesValue.isNull()) {
+    if (!rangesValue.is<JsonArray>()) return "invalid_schedule";
+    JsonArray rangesArray = rangesValue.as<JsonArray>();
+    if (rangesArray.size() > MAX_PACK_RANGES) return "too_many_pack_ranges";
+    for (JsonVariant rangeValue : rangesArray) {
+      if (!rangeValue.is<JsonObject>()) return "invalid_schedule";
+      JsonObject rangeObj = rangeValue.as<JsonObject>();
+      DateRange range;
+      if (!parseDateField(rangeObj["from"], range.fromKey)) return "invalid_schedule";
+      if (!parseDateField(rangeObj["to"], range.toKey)) return "invalid_schedule";
+      if (range.fromKey == 0 && range.toKey == 0) return "invalid_schedule";
+      pack.ranges[pack.rangeCount++] = range;
+    }
+  } else {
+    DateRange range;
+    if (!parseDateField(packObj["from"], range.fromKey)) return "invalid_schedule";
+    if (!parseDateField(packObj["to"], range.toKey)) return "invalid_schedule";
+    if (range.fromKey != 0 || range.toKey != 0) pack.ranges[pack.rangeCount++] = range;
+  }
+  for (uint8_t i = 0; i < pack.rangeCount; ++i) {
+    const DateRange &range = pack.ranges[i];
+    if (!pack.yearly && range.fromKey != 0 && range.toKey != 0 && range.toKey < range.fromKey) {
+      return "invalid_schedule";
+    }
   }
 
   JsonVariant datesValue = packObj["dates"];
@@ -876,8 +988,14 @@ void loadScheduleFromFlash() {
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, in);
   in.close();
-  if (err) return;
-  if (parseScheduleDocument(doc) != nullptr) return;
+  if (err) {
+    if (fileContentIsBad(err)) setAsideBadFile(SCHEDULE_FILE);
+    return;
+  }
+  if (parseScheduleDocument(doc) != nullptr) {
+    setAsideBadFile(SCHEDULE_FILE);
+    return;
+  }
   applyParsedSchedule();
 }
 
@@ -904,12 +1022,13 @@ void appendModule(JsonArray &arr, const ScheduleModule &module) {
 }
 
 void buildScheduleDocument(JsonDocument &doc, bool includeLimits) {
-  doc["version"] = 5;
+  doc["version"] = 6;
   if (includeLimits) {
     doc["max_modules"] = static_cast<unsigned>(MAX_MODULES);
     doc["max_packs"] = static_cast<unsigned>(MAX_PACKS);
     doc["max_pack_modules"] = static_cast<unsigned>(MAX_PACK_MODULES);
     doc["max_pack_dates"] = static_cast<unsigned>(MAX_PACK_DATES);
+    doc["max_pack_ranges"] = static_cast<unsigned>(MAX_PACK_RANGES);
   }
   if (autoStartDate != 0 || autoStopDate != 0) {
     JsonObject autoObj = doc["auto"].to<JsonObject>();
@@ -927,8 +1046,19 @@ void buildScheduleDocument(JsonDocument &doc, bool includeLimits) {
     packObj["enabled"] = pack.enabled;
     if (pack.yearly) packObj["yearly"] = true;
     if (pack.mute) packObj["mute"] = true;
-    if (pack.fromKey != 0) packObj["from"] = formatDateKey(pack.fromKey);
-    if (pack.toKey != 0) packObj["to"] = formatDateKey(pack.toKey);
+    // One range keeps the version 5 shape, so an older app still reads it.
+    if (pack.rangeCount == 1) {
+      const DateRange &range = pack.ranges[0];
+      if (range.fromKey != 0) packObj["from"] = formatDateKey(range.fromKey);
+      if (range.toKey != 0) packObj["to"] = formatDateKey(range.toKey);
+    } else if (pack.rangeCount > 1) {
+      JsonArray rangesArray = packObj["ranges"].to<JsonArray>();
+      for (uint8_t r = 0; r < pack.rangeCount; ++r) {
+        JsonObject rangeObj = rangesArray.add<JsonObject>();
+        if (pack.ranges[r].fromKey != 0) rangeObj["from"] = formatDateKey(pack.ranges[r].fromKey);
+        if (pack.ranges[r].toKey != 0) rangeObj["to"] = formatDateKey(pack.ranges[r].toKey);
+      }
+    }
     if (pack.dateCount > 0) {
       JsonArray datesArray = packObj["dates"].to<JsonArray>();
       for (uint8_t d = 0; d < pack.dateCount; ++d) {
@@ -974,35 +1104,157 @@ bool validToken(const String &value) {
   return true;
 }
 
+bool validChannel(int value) { return value >= 1 && value <= 13; }
+bool validMaxClients(int value) { return value >= 1 && value <= 8; }
+
+bool saveNetworkToFlash() {
+  JsonDocument doc;
+  doc["v"] = FILE_FORMAT;
+  doc["ssid"] = apSsid;
+  doc["password"] = apPassword;
+  doc["token"] = apiToken;
+  doc["channel"] = apChannel;
+  doc["max_clients"] = apMaxClients;
+  // A local-only switch on trial is not stored until a client confirmed it.
+  doc["local_only"] = localOnlyTrial ? localOnlyPrevious : apLocalOnly;
+  String payload;
+  serializeJson(doc, payload);
+  return storageOk && writeFileAtomic(NETWORK_FILE, payload);
+}
+
+// Reads /network.json. A missing file is created from the build defaults, so
+// the values a device first ran with stay with it across firmware updates.
+// A damaged file never locks the user out: the defaults are used and the
+// file is left alone until POST /network replaces it.
 void loadNetworkFromFlash() {
   apSsid = DEFAULT_AP_SSID;
   apPassword = DEFAULT_AP_PASSWORD;
   apiToken = DEFAULT_API_TOKEN;
+  apChannel = DEFAULT_AP_CHANNEL;
+  apMaxClients = DEFAULT_AP_MAX_CLIENTS;
+  apLocalOnly = false;
+  localOnlyTrial = false;
+  networkConfigError = false;
   if (!storageOk) return;
+  if (!LittleFS.exists(NETWORK_FILE)) {
+    saveNetworkToFlash();
+    return;
+  }
   File in = LittleFS.open(NETWORK_FILE, "r");
   if (!in) return;
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, in);
   in.close();
-  if (err) return;
+  if (err) {
+    networkConfigError = fileContentIsBad(err);
+    return;
+  }
   String ssid = doc["ssid"] | DEFAULT_AP_SSID;
   String password = doc["password"] | DEFAULT_AP_PASSWORD;
   String token = doc["token"] | DEFAULT_API_TOKEN;
-  // A damaged file must never lock the user out: fall back to the defaults.
-  if (!validSsid(ssid) || !validPassword(password) || !validToken(token)) return;
+  int channel = doc["channel"] | static_cast<int>(DEFAULT_AP_CHANNEL);
+  int maxClients = doc["max_clients"] | static_cast<int>(DEFAULT_AP_MAX_CLIENTS);
+  bool localOnly = doc["local_only"] | false;
+  if (!validSsid(ssid) || !validPassword(password) || !validToken(token) ||
+      !validChannel(channel) || !validMaxClients(maxClients)) {
+    networkConfigError = true;
+    return;
+  }
   apSsid = ssid;
   apPassword = password;
   apiToken = token;
+  apChannel = static_cast<uint8_t>(channel);
+  apMaxClients = static_cast<uint8_t>(maxClients);
+  apLocalOnly = localOnly;
+  // Files without the new fields get them now, so a later firmware built with
+  // other defaults cannot change them.
+  if (doc["v"].isNull() || doc["channel"].isNull() || doc["max_clients"].isNull() ||
+      doc["local_only"].isNull()) {
+    saveNetworkToFlash();
+  }
 }
 
-bool saveNetworkToFlash() {
+// GPIOs that can drive the relay, the LED and the I2C bus: outputs that are
+// not wired to the SPI flash (6..11), not the serial console (1, 3) and not
+// input-only (34..39).
+bool validOutputPin(int pin) {
+  static const uint8_t PINS[] = {0,  2,  4,  5,  12, 13, 14, 15, 16, 17,
+                                 18, 19, 21, 22, 23, 25, 26, 27, 32, 33};
+  for (uint8_t candidate : PINS) {
+    if (candidate == pin) return true;
+  }
+  return false;
+}
+
+bool validDeviceConfig(const DeviceConfig &config) {
+  const uint8_t pins[] = {config.relay, config.ledGreen, config.ledRed, config.sda, config.scl};
+  for (size_t i = 0; i < 5; ++i) {
+    if (!validOutputPin(pins[i])) return false;
+    for (size_t j = i + 1; j < 5; ++j) {
+      if (pins[i] == pins[j]) return false;
+    }
+  }
+  return true;
+}
+
+void writeDeviceConfig(JsonDocument &doc, const DeviceConfig &config) {
+  doc["relay"] = config.relay;
+  doc["led_green"] = config.ledGreen;
+  doc["led_red"] = config.ledRed;
+  doc["sda"] = config.sda;
+  doc["scl"] = config.scl;
+  doc["led_active_low"] = config.ledActiveLow;
+}
+
+bool saveDeviceConfig(const DeviceConfig &config) {
   JsonDocument doc;
-  doc["ssid"] = apSsid;
-  doc["password"] = apPassword;
-  doc["token"] = apiToken;
+  doc["v"] = FILE_FORMAT;
+  writeDeviceConfig(doc, config);
   String payload;
   serializeJson(doc, payload);
-  return storageOk && writeFileAtomic(NETWORK_FILE, payload);
+  return storageOk && writeFileAtomic(DEVICE_FILE, payload);
+}
+
+// Reads a wiring field; false when it is present but not a usable integer.
+bool readPinField(JsonVariant value, uint8_t fallback, uint8_t &out) {
+  int pin = 0;
+  if (!parseIntField(value, 0, 39, fallback, pin)) return false;
+  out = static_cast<uint8_t>(pin);
+  return true;
+}
+
+bool parseDeviceConfig(JsonDocument &doc, const DeviceConfig &base, DeviceConfig &out) {
+  out = base;
+  if (!readPinField(doc["relay"], base.relay, out.relay)) return false;
+  if (!readPinField(doc["led_green"], base.ledGreen, out.ledGreen)) return false;
+  if (!readPinField(doc["led_red"], base.ledRed, out.ledRed)) return false;
+  if (!readPinField(doc["sda"], base.sda, out.sda)) return false;
+  if (!readPinField(doc["scl"], base.scl, out.scl)) return false;
+  if (!parseBoolField(doc["led_active_low"], base.ledActiveLow, out.ledActiveLow)) return false;
+  return validDeviceConfig(out);
+}
+
+// Reads /device.json once at boot, before any pin is touched. Like the
+// network file, a missing one is created from the build defaults.
+void loadDeviceConfig() {
+  device = DeviceConfig();
+  deviceConfigError = false;
+  if (!storageOk) return;
+  if (!LittleFS.exists(DEVICE_FILE)) {
+    saveDeviceConfig(device);
+    return;
+  }
+  File in = LittleFS.open(DEVICE_FILE, "r");
+  if (!in) return;
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, in);
+  in.close();
+  DeviceConfig parsed;
+  if (err || !parseDeviceConfig(doc, DeviceConfig(), parsed)) {
+    deviceConfigError = true;
+    return;
+  }
+  device = parsed;
 }
 
 void tryMountStorage() {
@@ -1064,7 +1316,7 @@ void pollRtc() {
 }
 
 void tryDetectRtc() {
-  Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
+  Wire.begin(device.sda, device.scl);
   bool found = rtc.begin(&Wire);
   rtcOk = found;
   if (found) {
@@ -1329,16 +1581,46 @@ void updateLed() {
 
 // ------------------------------ Wi-Fi / AP --------------------------------
 
+// In local-only mode the DHCP server leaves out the router option. Without a
+// default route Android and iOS treat the network as local, keep mobile data
+// for the internet and still reach 192.168.4.1 over Wi-Fi.
+void applyDhcpRouterOption() {
+  esp_netif_t *netif = WiFi.AP.netif();
+  if (netif == nullptr) return;
+  dhcps_offer_t offer = apLocalOnly ? 0 : OFFER_ROUTER;
+  esp_netif_dhcps_stop(netif);
+  esp_netif_dhcps_option(netif, ESP_NETIF_OP_SET, ESP_NETIF_ROUTER_SOLICITATION_ADDRESS,
+                         &offer, sizeof(offer));
+  esp_netif_dhcps_start(netif);
+}
+
 void startAccessPoint() {
   WiFi.mode(WIFI_AP);
   IPAddress ip(192, 168, 4, 1);
-  IPAddress gateway(192, 168, 4, 1);
+  IPAddress gateway = apLocalOnly ? IPAddress(0, 0, 0, 0) : ip;
   IPAddress subnet(255, 255, 255, 0);
   WiFi.softAPConfig(ip, gateway, subnet);
   const char *password = apPassword.length() > 0 ? apPassword.c_str() : nullptr;
-  apOk = WiFi.softAP(apSsid.c_str(), password, AP_CHANNEL, 0, AP_MAX_CLIENTS);
+  apOk = WiFi.softAP(apSsid.c_str(), password, apChannel, 0, apMaxClients);
+  if (apOk) applyDhcpRouterOption();
   apLastRetryMs = millis();
   apLastIpCheckMs = apLastRetryMs;
+}
+
+void scheduleApRestart() {
+  apRestartPending = true;
+  apRestartAtMs = millis() + AP_RESTART_DELAY_MS;
+}
+
+// Any authorised request after the access point came back proves that a
+// client can still join it, so a local-only switch on trial is kept.
+void confirmLocalOnlyTrial() {
+  if (!localOnlyTrial || apRestartPending) return;
+  localOnlyTrial = false;
+  if (!saveNetworkToFlash()) {
+    // Not stored: the next boot starts in the previous mode, which is safe.
+    storageRetryPending = true;
+  }
 }
 
 void handleApTimers() {
@@ -1347,7 +1629,20 @@ void handleApTimers() {
     apRestartPending = false;
     WiFi.softAPdisconnect(true);
     startAccessPoint();
+    if (localOnlyTrial) localOnlyTrialStartMs = millis();
     return;
+  }
+  if (localOnlyTrial && !apRestartPending &&
+      nowMs - localOnlyTrialStartMs >= LOCAL_ONLY_TRIAL_MS) {
+    // Nobody came back: return to the mode that worked.
+    localOnlyTrial = false;
+    apLocalOnly = localOnlyPrevious;
+    scheduleApRestart();
+    return;
+  }
+  if (rebootPending && static_cast<int32_t>(nowMs - rebootAtMs) >= 0) {
+    relayOff();
+    ESP.restart();
   }
   if (!apOk && nowMs - apLastRetryMs >= AP_RETRY_MS) {
     startAccessPoint();
@@ -1383,18 +1678,74 @@ void sendError(int code, const char *errorCode) {
   sendDocument(code, doc);
 }
 
-bool tokenAccepted() {
+// Compares in time that depends only on the lengths, so the response time does
+// not reveal how many leading characters of a guess were right.
+bool tokensEqual(const String &given, const String &expected) {
+  if (given.length() != expected.length()) return false;
+  uint8_t diff = 0;
+  for (size_t i = 0; i < expected.length(); ++i) {
+    diff |= static_cast<uint8_t>(given[i] ^ expected[i]);
+  }
+  return diff == 0;
+}
+
+// Brute-force brake: after AUTH_MAX_FAILURES wrong tokens every request is
+// refused for AUTH_LOCKOUT_MS, the right token included.
+const uint8_t AUTH_MAX_FAILURES = 10;
+const uint32_t AUTH_LOCKOUT_MS = 30000;
+uint8_t authFailures = 0;
+bool authLocked = false;
+uint32_t authLockedAtMs = 0;
+
+bool authLockedOut() {
+  if (authLocked && millis() - authLockedAtMs >= AUTH_LOCKOUT_MS) {
+    authLocked = false;
+    authFailures = 0;
+  }
+  return authLocked;
+}
+
+void noteAuthFailure() {
+  if (++authFailures >= AUTH_MAX_FAILURES) {
+    authLocked = true;
+    authLockedAtMs = millis();
+  }
+}
+
+// headerOnly: the token must come in the X-Token header. A web page in the
+// phone's browser cannot add a custom header to a cross-origin request
+// without a CORS preflight, which this server never approves, so such a
+// request can never pass.
+bool tokenAccepted(bool headerOnly = false) {
   if (apiToken.length() == 0) return true;
-  if (server.hasHeader("X-Token") && server.header("X-Token") == apiToken) {
+  if (authLockedOut()) return false;
+  bool ok = (server.hasHeader("X-Token") && tokensEqual(server.header("X-Token"), apiToken)) ||
+            (!headerOnly && server.hasArg("token") && tokensEqual(server.arg("token"), apiToken));
+  if (ok) {
+    authFailures = 0;
+  } else {
+    noteAuthFailure();
+  }
+  return ok;
+}
+
+bool requireToken(bool headerOnly = false) {
+  if (tokenAccepted(headerOnly)) {
+    confirmLocalOnlyTrial();
     return true;
   }
-  if (server.hasArg("token") && server.arg("token") == apiToken) return true;
+  sendError(authLocked ? 429 : 401, authLocked ? "too_many_attempts" : "unauthorized");
   return false;
 }
 
-bool requireToken() {
-  if (tokenAccepted()) return true;
-  sendError(401, "unauthorized");
+// Changes made by POST requests need a JSON body. A cross-origin page can
+// send text/plain or form bodies without a preflight, but not JSON, so this
+// keeps a web page from driving the device when no token is set.
+bool requireJsonRequest() {
+  String type = server.header("Content-Type");
+  type.toLowerCase();
+  if (type.startsWith("application/json")) return true;
+  sendError(415, "json_required");
   return false;
 }
 
@@ -1417,8 +1768,6 @@ bool readJsonBody(JsonDocument &doc, const char *&errorCode) {
   }
   return true;
 }
-
-void handleOptions() { server.send(204, "text/plain", ""); }
 
 // Describes one resolved bell: its time, label and what it means.
 void writeBell(JsonObject obj, uint16_t minute, uint16_t moduleIndex, uint8_t role) {
@@ -1471,8 +1820,11 @@ void handleGetStatus() {
   if (rtcOk && !timeIsValid()) errors.add("time_not_set");
   if (!storageOk) errors.add("storage_error");
   if (!apOk) errors.add("wifi_ap_error");
+  if (networkConfigError) errors.add("network_config_error");
+  if (deviceConfigError) errors.add("device_config_error");
   doc["fw"] = FW_VERSION;
   doc["api"] = API_VERSION;
+  doc["min_app"] = MIN_APP_VERSION;
   doc["ssid"] = apSsid;
   sendDocument(200, doc);
 }
@@ -1498,7 +1850,7 @@ bool parseRingSeconds(int &seconds) {
 }
 
 void handlePostRing() {
-  if (!requireToken()) return;
+  if (!requireToken() || !requireJsonRequest()) return;
   int seconds = ringDefault;
   if (!parseRingSeconds(seconds)) {
     sendError(400, "invalid_sec");
@@ -1514,7 +1866,7 @@ void handlePostRing() {
 }
 
 void handlePostStop() {
-  if (!requireToken()) return;
+  if (!requireToken() || !requireJsonRequest()) return;
   stopRing();
   JsonDocument doc;
   doc["ok"] = true;
@@ -1530,7 +1882,7 @@ void handleGetMode() {
 }
 
 void handlePostMode() {
-  if (!requireToken()) return;
+  if (!requireToken() || !requireJsonRequest()) return;
   JsonDocument doc;
   const char *errorCode = nullptr;
   if (!readJsonBody(doc, errorCode)) {
@@ -1563,7 +1915,7 @@ void handlePostMode() {
 }
 
 void handlePostTime() {
-  if (!requireToken()) return;
+  if (!requireToken() || !requireJsonRequest()) return;
   JsonDocument doc;
   const char *errorCode = nullptr;
   if (!readJsonBody(doc, errorCode)) {
@@ -1636,7 +1988,7 @@ void handleGetScheduleDay() {
 }
 
 void handlePostSchedule() {
-  if (!requireToken()) return;
+  if (!requireToken() || !requireJsonRequest()) return;
 
   // The parsed request is freed before the schedule is saved, so the request
   // document and the one written to flash are never in RAM together.
@@ -1677,7 +2029,7 @@ void handlePostSchedule() {
 // back to the build defaults too. The clock keeps running; it lives in the
 // DS3231.
 void handlePostReset() {
-  if (!requireToken()) return;
+  if (!requireToken() || !requireJsonRequest()) return;
   bool network = false;
   if (server.hasArg("plain") && server.arg("plain").length() > 0) {
     JsonDocument doc;
@@ -1694,17 +2046,20 @@ void handlePostReset() {
     if (LittleFS.exists(SETTINGS_FILE) && !LittleFS.remove(SETTINGS_FILE)) ok = false;
     if (network && LittleFS.exists(NETWORK_FILE) && !LittleFS.remove(NETWORK_FILE)) ok = false;
   }
+  // The wiring in /device.json describes the hardware, not a preference, so
+  // a reset keeps it.
   bool restart = false;
   if (network) {
     String oldSsid = apSsid;
     String oldPassword = apPassword;
+    uint8_t oldChannel = apChannel;
+    uint8_t oldMaxClients = apMaxClients;
+    bool oldLocalOnly = apLocalOnly;
     loadNetworkFromFlash();
-    restart = apSsid != oldSsid || apPassword != oldPassword;
+    restart = apSsid != oldSsid || apPassword != oldPassword || apChannel != oldChannel ||
+              apMaxClients != oldMaxClients || apLocalOnly != oldLocalOnly;
   }
-  if (restart) {
-    apRestartPending = true;
-    apRestartAtMs = millis() + AP_RESTART_DELAY_MS;
-  }
+  if (restart) scheduleApRestart();
   loadSettingsFromFlash();
   moduleCount = 0;
   packCount = 0;
@@ -1725,18 +2080,23 @@ void handleGetNetwork() {
   if (!requireToken()) return;
   JsonDocument doc;
   doc["ssid"] = apSsid;
-  doc["channel"] = AP_CHANNEL;
+  doc["channel"] = apChannel;
+  doc["max_clients"] = apMaxClients;
   doc["open"] = apPassword.length() == 0;
   doc["token_set"] = apiToken.length() > 0;
+  doc["local_only"] = apLocalOnly;
+  doc["local_only_trial"] = localOnlyTrial;
   sendDocument(200, doc);
 }
 
-// Changes the access point name, its password and the API token. Every field
-// is optional; "password": "" makes the network open and "token": "" turns
-// authentication off. The access point restarts shortly after the response
-// when the name or the password changed.
+// Changes the access point name, its password, channel, client limit,
+// local-only mode and the API token. Every field is optional; "password": ""
+// makes the network open and "token": "" turns authentication off. The access
+// point restarts shortly after the response when anything but the token
+// changed. A change of "local_only" is a trial: it is stored only once a
+// client talks to the device on the restarted network.
 void handlePostNetwork() {
-  if (!requireToken()) return;
+  if (!requireToken() || !requireJsonRequest()) return;
   JsonDocument doc;
   const char *errorCode = nullptr;
   if (!readJsonBody(doc, errorCode)) {
@@ -1782,33 +2142,67 @@ void handlePostNetwork() {
     sendError(400, "invalid_token");
     return;
   }
+  int channel = apChannel;
+  if (!parseIntField(doc["channel"], 1, 13, apChannel, channel)) {
+    sendError(400, "invalid_channel");
+    return;
+  }
+  int maxClients = apMaxClients;
+  if (!parseIntField(doc["max_clients"], 1, 8, apMaxClients, maxClients)) {
+    sendError(400, "invalid_max_clients");
+    return;
+  }
+  bool localOnly = apLocalOnly;
+  if (!parseBoolField(doc["local_only"], apLocalOnly, localOnly)) {
+    sendError(400, "invalid_local_only");
+    return;
+  }
 
-  bool restart = ssid != apSsid || password != apPassword;
+  bool localOnlyChanged = localOnly != apLocalOnly;
+  bool restart = ssid != apSsid || password != apPassword || channel != apChannel ||
+                 maxClients != apMaxClients || localOnlyChanged;
   bool changed = restart || token != apiToken;
   if (changed) {
     String oldSsid = apSsid;
     String oldPassword = apPassword;
     String oldToken = apiToken;
+    uint8_t oldChannel = apChannel;
+    uint8_t oldMaxClients = apMaxClients;
+    bool oldLocalOnly = apLocalOnly;
+    bool oldTrial = localOnlyTrial;
+    bool oldPrevious = localOnlyPrevious;
+    if (localOnlyChanged) {
+      // Revert target: the mode that is stored, i.e. known to work.
+      if (!localOnlyTrial) localOnlyPrevious = apLocalOnly;
+      localOnlyTrial = localOnly != localOnlyPrevious;
+    }
     apSsid = ssid;
     apPassword = password;
     apiToken = token;
+    apChannel = static_cast<uint8_t>(channel);
+    apMaxClients = static_cast<uint8_t>(maxClients);
+    apLocalOnly = localOnly;
     if (!saveNetworkToFlash()) {
       apSsid = oldSsid;
       apPassword = oldPassword;
       apiToken = oldToken;
+      apChannel = oldChannel;
+      apMaxClients = oldMaxClients;
+      apLocalOnly = oldLocalOnly;
+      localOnlyTrial = oldTrial;
+      localOnlyPrevious = oldPrevious;
       sendError(500, "storage_error");
       return;
     }
   }
-  if (restart) {
-    apRestartPending = true;
-    apRestartAtMs = millis() + AP_RESTART_DELAY_MS;
-  }
+  if (restart) scheduleApRestart();
 
   JsonDocument out;
   out["ok"] = true;
   out["ssid"] = apSsid;
   out["restart"] = restart;
+  out["local_only"] = apLocalOnly;
+  out["local_only_trial"] = localOnlyTrial;
   sendDocument(200, out);
 }
 
@@ -1820,7 +2214,7 @@ void handleGetSettings() {
 }
 
 void handlePostSettings() {
-  if (!requireToken()) return;
+  if (!requireToken() || !requireJsonRequest()) return;
   JsonDocument doc;
   const char *errorCode = nullptr;
   if (!readJsonBody(doc, errorCode)) {
@@ -1845,6 +2239,162 @@ void handlePostSettings() {
   JsonDocument out;
   out["ok"] = true;
   out["ring_default"] = ringDefault;
+  sendDocument(200, out);
+}
+
+// ------------------------------- Wiring -----------------------------------
+
+void handleGetDevice() {
+  if (!requireToken()) return;
+  JsonDocument doc;
+  writeDeviceConfig(doc, device);
+  doc["error"] = deviceConfigError;
+  sendDocument(200, doc);
+}
+
+// Stores new wiring and restarts the device, because pins are set up once at
+// boot. Every field is optional; the five pins must be distinct GPIOs that
+// can drive an output.
+void handlePostDevice() {
+  if (!requireToken() || !requireJsonRequest()) return;
+  JsonDocument doc;
+  const char *errorCode = nullptr;
+  if (!readJsonBody(doc, errorCode)) {
+    sendError(400, errorCode);
+    return;
+  }
+  DeviceConfig updated;
+  if (!parseDeviceConfig(doc, device, updated)) {
+    sendError(400, "invalid_pins");
+    return;
+  }
+  if (!saveDeviceConfig(updated)) {
+    sendError(500, "storage_error");
+    return;
+  }
+  stopRing();
+  rebootPending = true;
+  rebootAtMs = millis() + REBOOT_DELAY_MS;
+  JsonDocument out;
+  out["ok"] = true;
+  out["restart"] = true;
+  sendDocument(200, out);
+}
+
+// --------------------------- Firmware update ------------------------------
+//
+// POST /update?md5=<32 hex>&size=<bytes> with the image as the "firmware"
+// part of a multipart/form-data body. The image goes into the idle OTA slot;
+// the device boots it only after the whole image was written and its MD5
+// matched, so a broken upload or a power cut keeps the running firmware.
+// LittleFS is a separate partition and is not touched: the schedule, the
+// settings, the network and the wiring all survive the update.
+//
+// Flashing needs an API token to be set and sent in the X-Token header, so
+// neither a client without the token nor a web page can replace the firmware.
+
+bool validMd5(const String &value) {
+  if (value.length() != 32) return false;
+  for (size_t i = 0; i < value.length(); ++i) {
+    char c = value[i];
+    bool hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+    if (!hex) return false;
+  }
+  return true;
+}
+
+void failUpdate(const char *error) {
+  if (Update.isRunning()) Update.abort();
+  if (updateError == nullptr) updateError = error;
+  updateRunning = false;
+}
+
+// Called by the web server for every chunk of the uploaded file.
+void handleUpdateUpload() {
+  HTTPUpload &upload = server.upload();
+  switch (upload.status) {
+    case UPLOAD_FILE_START: {
+      updateError = nullptr;
+      updateRunning = false;
+      updateAuthorized = apiToken.length() > 0 && tokenAccepted(true);
+      if (apiToken.length() == 0) {
+        updateError = "token_required";
+        return;
+      }
+      if (!updateAuthorized) {
+        updateError = authLocked ? "too_many_attempts" : "unauthorized";
+        return;
+      }
+      String md5 = server.arg("md5");
+      if (!validMd5(md5)) {
+        updateError = "invalid_md5";
+        return;
+      }
+      size_t size = UPDATE_SIZE_UNKNOWN;
+      if (server.hasArg("size")) {
+        long parsed = server.arg("size").toInt();
+        if (parsed <= 0) {
+          updateError = "invalid_size";
+          return;
+        }
+        size = static_cast<size_t>(parsed);
+      }
+      // The web server does not run the loop while it reads the body, so a
+      // ring could not be stopped in time and a bell would be missed anyway.
+      stopRing();
+      if (!Update.begin(size, U_FLASH)) {
+        failUpdate("update_begin_failed");
+        return;
+      }
+      Update.setMD5(md5.c_str());
+      updateRunning = true;
+      break;
+    }
+    case UPLOAD_FILE_WRITE:
+      if (!updateRunning) return;
+      if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+        failUpdate("update_write_failed");
+      }
+      break;
+    case UPLOAD_FILE_END:
+      if (!updateRunning) return;
+      updateRunning = false;
+      if (!Update.end(true)) {
+        // end() checks the MD5 and the image header before switching slots.
+        updateError = Update.getError() == UPDATE_ERROR_MD5 ? "md5_mismatch" : "invalid_image";
+      }
+      break;
+    case UPLOAD_FILE_ABORTED:
+    default:
+      failUpdate("upload_aborted");
+      break;
+  }
+}
+
+// Called once the request is complete.
+void handlePostUpdate() {
+  if (updateError == nullptr && !updateAuthorized) {
+    // No file part was sent at all.
+    updateError = "no_firmware";
+  }
+  if (updateError != nullptr) {
+    const char *error = updateError;
+    updateError = nullptr;
+    updateAuthorized = false;
+    int code = 400;
+    if (strcmp(error, "unauthorized") == 0) code = 401;
+    else if (strcmp(error, "token_required") == 0) code = 403;
+    else if (strcmp(error, "too_many_attempts") == 0) code = 429;
+    else if (strncmp(error, "update_", 7) == 0) code = 500;
+    sendError(code, error);
+    return;
+  }
+  updateAuthorized = false;
+  rebootPending = true;
+  rebootAtMs = millis() + REBOOT_DELAY_MS;
+  JsonDocument out;
+  out["ok"] = true;
+  out["restart"] = true;
   sendDocument(200, out);
 }
 
@@ -1898,18 +2448,13 @@ refresh();setInterval(refresh,2000);
 void handleNotFound() { sendError(404, "not_found"); }
 
 void setupHttpRoutes() {
-  server.enableCORS(true);
+  // No CORS: the app is not a web page and the built-in page is same-origin,
+  // so allowing cross-origin requests would only let any web site the phone
+  // opens talk to the bell.
   // WebServer keeps only the request headers it is told to collect; without
   // this the X-Token header is dropped and only ?token= would work.
-  static const char *HEADER_KEYS[] = {"X-Token"};
-  server.collectHeaders(HEADER_KEYS, 1);
-
-  const char *paths[] = {"/",     "/status", "/ring",    "/stop",
-                         "/mode", "/time",   "/schedule", "/settings",
-                         "/schedule/day", "/reset",  "/network"};
-  for (const char *path : paths) {
-    server.on(path, HTTP_OPTIONS, handleOptions);
-  }
+  static const char *HEADER_KEYS[] = {"X-Token", "Content-Type"};
+  server.collectHeaders(HEADER_KEYS, 2);
 
   server.on("/", HTTP_GET, handleRoot);
   server.on("/status", HTTP_GET, handleGetStatus);
@@ -1926,22 +2471,30 @@ void setupHttpRoutes() {
   server.on("/reset", HTTP_POST, handlePostReset);
   server.on("/network", HTTP_GET, handleGetNetwork);
   server.on("/network", HTTP_POST, handlePostNetwork);
+  server.on("/device", HTTP_GET, handleGetDevice);
+  server.on("/device", HTTP_POST, handlePostDevice);
+  server.on("/update", HTTP_POST, handlePostUpdate, handleUpdateUpload);
   server.onNotFound(handleNotFound);
 }
 
 }  // namespace
 
 void setup() {
+  // The wiring lives in /device.json, so storage comes first. Until then
+  // every GPIO is still a floating input, as during the boot ROM.
+  storageOk = LittleFS.begin(true);
+  loadDeviceConfig();
+
   // Force the active-low relay off before the pin becomes an output.
-  digitalWrite(PIN_RELAY, HIGH);
-  pinMode(PIN_RELAY, OUTPUT);
+  digitalWrite(device.relay, HIGH);
+  pinMode(device.relay, OUTPUT);
   relayOff();
 
   // KY-029: drive the dark level before the pins become outputs.
-  digitalWrite(PIN_LED_GREEN, ledOffLevel());
-  digitalWrite(PIN_LED_RED, ledOffLevel());
-  pinMode(PIN_LED_GREEN, OUTPUT);
-  pinMode(PIN_LED_RED, OUTPUT);
+  digitalWrite(device.ledGreen, ledOffLevel());
+  digitalWrite(device.ledRed, ledOffLevel());
+  pinMode(device.ledGreen, OUTPUT);
+  pinMode(device.ledRed, OUTPUT);
   setLed(false, false);
 
   Serial.begin(115200);

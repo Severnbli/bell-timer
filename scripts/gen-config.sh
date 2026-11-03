@@ -9,6 +9,8 @@
 #   ENV_FILE       settings file to read (default: <repo>/.env)
 #   CONFIG_HEADER  header to write
 #                  (default: <repo>/firmware/BellTimer/app_config.h)
+#   FW_VERSION     firmware version to report, e.g. 2.1.0 (default: the one
+#                  in BellTimer.ino); set by the release workflow
 #
 # The ESP32 cannot read files from the build machine, so the values are baked
 # into a generated header at build time.
@@ -26,7 +28,7 @@ fail() {
 }
 
 usage() {
-    sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 case "${1-}" in
@@ -123,7 +125,12 @@ write_config() {
     local pin_i2c_sda="${PIN_I2C_SDA-21}"
     local pin_i2c_scl="${PIN_I2C_SCL-22}"
     local led_active_low="${LED_ACTIVE_LOW-false}"
+    local fw_version="${FW_VERSION-}"
     local password_len
+
+    if [[ -n "${fw_version}" && ! "${fw_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+        fail "FW_VERSION must look like 2.1.0, got '${fw_version}'"
+    fi
 
     [[ -n "${ap_ssid}" ]] || fail "AP_SSID must not be empty"
     (( $(byte_len "${ap_ssid}") <= 32 )) || fail "AP_SSID must be at most 32 bytes"
@@ -168,6 +175,10 @@ write_config() {
         echo "#define BELLTIMER_PIN_I2C_SDA ${pin_i2c_sda}"
         echo "#define BELLTIMER_PIN_I2C_SCL ${pin_i2c_scl}"
         echo "#define BELLTIMER_LED_ACTIVE_LOW ${led_active_low}"
+        if [[ -n "${fw_version}" ]]; then
+            echo
+            echo "#define BELLTIMER_FW_VERSION \"${fw_version}\""
+        fi
     } > "${tmp}"
 
     if [[ -f "${CONFIG_HEADER}" ]] && cmp -s "${tmp}" "${CONFIG_HEADER}"; then
