@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.TouchApp
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.Button
@@ -69,6 +70,7 @@ import com.belltimer.app.ConnectionState
 import com.belltimer.app.R
 import com.belltimer.app.UiState
 import com.belltimer.app.data.API_MODULES
+import com.belltimer.app.data.MIN_FIRMWARE_VERSION
 import com.belltimer.app.data.BellRole
 import com.belltimer.app.data.ModuleType
 import com.belltimer.app.data.ResolvedBell
@@ -191,6 +193,31 @@ private fun Banners(state: UiState) {
                 text = stringResource(R.string.issue_firmware_too_old),
                 container = colors.errorContainer,
                 content = colors.onErrorContainer,
+            )
+        }
+        val compatibility = state.compatibility
+        compatibility.deviceNeedsApp?.let {
+            Banner(
+                icon = Icons.Default.ErrorOutline,
+                text = stringResource(R.string.compat_device_needs_app, status.fw, it),
+                container = colors.errorContainer,
+                content = colors.onErrorContainer,
+            )
+        }
+        if (compatibility.deviceTooOld) {
+            Banner(
+                icon = Icons.Default.ErrorOutline,
+                text = stringResource(R.string.compat_device_too_old, status.fw, MIN_FIRMWARE_VERSION),
+                container = colors.errorContainer,
+                content = colors.onErrorContainer,
+            )
+        }
+        compatibility.firmwareUpdate?.let {
+            Banner(
+                icon = Icons.Default.SystemUpdate,
+                text = stringResource(R.string.update_firmware_banner, it.version),
+                container = colors.secondaryContainer,
+                content = colors.onSecondaryContainer,
             )
         }
     }
