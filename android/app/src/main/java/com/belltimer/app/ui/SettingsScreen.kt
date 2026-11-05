@@ -263,6 +263,11 @@ private fun DeveloperSettingsScreen(state: UiState, viewModel: AppViewModel, onB
             viewModel.saveSettings(baseUrl, token, settings.ringDefault, settings.autoSyncTime)
         }
 
+        val status = state.status
+        if (state.online && status != null && (status.uptime != null || status.resetReason != null)) {
+            DeviceStatusCard(uptime = status.uptime, resetReason = status.resetReason)
+        }
+
         if (state.online && state.network != null) {
             NetworkCard(state = state, onSave = viewModel::saveNetwork)
         }
@@ -298,6 +303,23 @@ private fun DeveloperSettingsScreen(state: UiState, viewModel: AppViewModel, onB
             onConfirm = viewModel::factoryReset,
             onDismiss = { confirmReset = false },
         )
+    }
+}
+
+/** How long the device has been running and why it last started. */
+@Composable
+private fun DeviceStatusCard(uptime: Long?, resetReason: String?) {
+    AppCard {
+        Text(stringResource(R.string.device_status_title), style = MaterialTheme.typography.titleMedium)
+        uptime?.let { AboutLine(stringResource(R.string.settings_uptime), uptimeText(it)) }
+        resetReason?.let { reason ->
+            AboutLine(stringResource(R.string.settings_last_start), resetReasonText(reason))
+            when (reason) {
+                "brownout" -> UpdateNote(stringResource(R.string.reset_hint_brownout), error = true)
+                "task_wdt", "int_wdt", "wdt", "panic" ->
+                    UpdateNote(stringResource(R.string.reset_hint_freeze), error = true)
+            }
+        }
     }
 }
 
