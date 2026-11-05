@@ -121,6 +121,32 @@ fun durationText(minutes: Int): String {
     }
 }
 
+/** Device uptime: "5 мин", "3 ч 20 мин", "2 д 4 ч". */
+@Composable
+fun uptimeText(seconds: Long): String {
+    val minutes = seconds / 60
+    val days = minutes / (60 * 24)
+    return if (days > 0) {
+        stringResource(R.string.duration_d_h, days.toInt(), ((minutes / 60) % 24).toInt())
+    } else {
+        durationText(minutes.toInt())
+    }
+}
+
+/** Why the device last started, as reported by the firmware in "reset". */
+@Composable
+fun resetReasonText(code: String): String = when (code) {
+    "power_on" -> stringResource(R.string.reset_reason_power_on)
+    "external" -> stringResource(R.string.reset_reason_external)
+    "software" -> stringResource(R.string.reset_reason_software)
+    "panic" -> stringResource(R.string.reset_reason_panic)
+    "task_wdt", "int_wdt", "wdt" -> stringResource(R.string.reset_reason_watchdog)
+    "brownout" -> stringResource(R.string.reset_reason_brownout)
+    "deep_sleep" -> stringResource(R.string.reset_reason_deep_sleep)
+    "unknown" -> stringResource(R.string.unknown)
+    else -> code
+}
+
 /** "через 12 мин", "через 2 ч 5 мин", "сейчас". */
 @Composable
 fun untilText(minutes: Long): String = when {

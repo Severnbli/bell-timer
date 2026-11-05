@@ -69,6 +69,10 @@ data class DeviceStatus(
     val ssid: String? = null,
     /** Oldest app the firmware supports; null on firmware before API 6. */
     val minApp: String? = null,
+    /** Seconds since the device started; null on firmware before 2.1.2. */
+    val uptime: Long? = null,
+    /** Why the device last started ("brownout", "task_wdt", ...); null on firmware before 2.1.2. */
+    val resetReason: String? = null,
 ) {
     val isAuto: Boolean get() = mode == "auto"
     val supportsModules: Boolean get() = api >= API_MODULES
@@ -135,6 +139,8 @@ data class StatusDto(
     /** API level of the firmware; absent on the oldest builds, which speak level 2. */
     val api: Int = 2,
     @SerialName("min_app") val minApp: String? = null,
+    val uptime: Long? = null,
+    val reset: String? = null,
 )
 
 @Serializable
@@ -302,6 +308,8 @@ fun StatusDto.toDomain(): DeviceStatus = DeviceStatus(
     api = api,
     ssid = ssid,
     minApp = minApp,
+    uptime = uptime,
+    resetReason = reset,
 )
 
 private fun NextBellDto.toDomain(): DeviceNextBell? {
