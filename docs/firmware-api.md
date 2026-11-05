@@ -86,7 +86,9 @@ Version dependencies:
   "fw": "2.1.0",
   "api": 6,
   "min_app": "1.5.0",
-  "ssid": "BellTimer"
+  "ssid": "BellTimer",
+  "uptime": 86400,
+  "reset": "power_on"
 }
 ```
 
@@ -97,6 +99,12 @@ Version dependencies:
   `storage_error`, `wifi_ap_error`, `network_config_error` (stored network
   settings unreadable, defaults in use) and `device_config_error` (stored
   wiring unreadable, defaults in use).
+* `uptime` is the number of seconds since the device started, and `reset` is
+  why it started: `power_on`, `external` (reset button), `software` (restart
+  after an update or a wiring change), `panic` (crash), `task_wdt` (`loop()`
+  stopped for 15 s and the watchdog restarted it), `int_wdt`, `wdt`,
+  `brownout` (supply voltage dropped), `deep_sleep`, `sdio` or `unknown`.
+  Both fields are optional: older firmware does not send them.
 
 ### `POST /time`
 

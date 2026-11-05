@@ -131,6 +131,8 @@ expect_contains "${WORK_DIR}/status.json" '"api":6' "status reports API level 6"
 expect_contains "${WORK_DIR}/status.json" '"min_app":"' "status reports the oldest supported app"
 expect_contains "${WORK_DIR}/status.json" '"next"' "status contains the next bell"
 expect_contains "${WORK_DIR}/status.json" '"synced"' "status contains the last sync time"
+expect_contains "${WORK_DIR}/status.json" '"uptime":' "status contains the uptime"
+expect_contains "${WORK_DIR}/status.json" '"reset":"' "status contains the reset reason"
 
 code="$(request GET /mode "" "${WORK_DIR}/original_mode.json")"
 expect_code 200 "${code}" "GET /mode" "${WORK_DIR}/original_mode.json"
