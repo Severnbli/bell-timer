@@ -19,6 +19,8 @@
 #include <Update.h>
 #include <esp_netif.h>
 #include <dhcpserver/dhcpserver.h>
+#include <esp_system.h>
+#include <esp_task_wdt.h>
 
 // Deployment settings (Wi-Fi credentials, API token, GPIO wiring) come from
 // .env. scripts/build-firmware.sh renders them into this header; it is
@@ -134,6 +136,12 @@ const uint32_t REBOOT_DELAY_MS = 1500;
 // previous mode returns, so a phone that cannot join the changed network does
 // not lock everyone out.
 const uint32_t LOCAL_ONLY_TRIAL_MS = 180000;
+// The task watchdog restarts the device when loop() stops running, for example
+// when interference from the bell freezes the chip. A single request can keep
+// the web server busy for several seconds (each read waits up to 5 s for a
+// slow client), so the limit is well above that. Firmware uploads feed the
+// watchdog for every chunk.
+const uint32_t LOOP_WDT_TIMEOUT_MS = 15000;
 
 const uint32_t RTC_POLL_MS = 250;
 const uint32_t RTC_RETRY_MS = 2000;
@@ -1299,6 +1307,41 @@ void updateRing() {
   ringLeftSec = (remaining + 999) / 1000;
 }
 
+// ------------------------------ Watchdog ----------------------------------
+
+// Why the chip started this time. Read once at boot and reported in /status,
+// so a brownout or a watchdog reset is visible from the app.
+esp_reset_reason_t bootResetReason = ESP_RST_UNKNOWN;
+
+const char *resetReasonName(esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_POWERON: return "power_on";
+    case ESP_RST_EXT: return "external";
+    case ESP_RST_SW: return "software";
+    case ESP_RST_PANIC: return "panic";
+    case ESP_RST_INT_WDT: return "int_wdt";
+    case ESP_RST_TASK_WDT: return "task_wdt";
+    case ESP_RST_WDT: return "wdt";
+    case ESP_RST_DEEPSLEEP: return "deep_sleep";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_SDIO: return "sdio";
+    default: return "unknown";
+  }
+}
+
+// Watches the loop task: the core feeds the watchdog before every loop() pass.
+// The idle task of core 0 stays watched, as in the core's default settings.
+void startLoopWatchdog() {
+  esp_task_wdt_config_t config = {};
+  config.timeout_ms = LOOP_WDT_TIMEOUT_MS;
+  config.idle_core_mask = 1U << 0;
+  config.trigger_panic = true;
+  if (esp_task_wdt_reconfigure(&config) != ESP_OK) {
+    esp_task_wdt_init(&config);
+  }
+  enableLoopWDT();
+}
+
 // -------------------------------- RTC -------------------------------------
 
 void pollRtc() {
@@ -1826,6 +1869,8 @@ void handleGetStatus() {
   doc["api"] = API_VERSION;
   doc["min_app"] = MIN_APP_VERSION;
   doc["ssid"] = apSsid;
+  doc["uptime"] = static_cast<uint32_t>(esp_timer_get_time() / 1000000ULL);
+  doc["reset"] = resetReasonName(bootResetReason);
   sendDocument(200, doc);
 }
 
@@ -2351,6 +2396,8 @@ void handleUpdateUpload() {
       break;
     }
     case UPLOAD_FILE_WRITE:
+      // The whole upload is read inside one loop() pass.
+      esp_task_wdt_reset();
       if (!updateRunning) return;
       if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
         failUpdate("update_write_failed");
@@ -2498,6 +2545,8 @@ void setup() {
   setLed(false, false);
 
   Serial.begin(115200);
+  bootResetReason = esp_reset_reason();
+  Serial.printf("BellTimer %s, reset reason: %s\n", FW_VERSION, resetReasonName(bootResetReason));
 
   rtcLastRetryMs = millis() - RTC_RETRY_MS;
   tryDetectRtc();
@@ -2514,6 +2563,9 @@ void setup() {
 
   rtcLastPollMs = millis();
   rtcLastStatusMs = millis();
+
+  // Last, so the first-boot LittleFS format above cannot trip it.
+  startLoopWatchdog();
 }
 
 void loop() {
