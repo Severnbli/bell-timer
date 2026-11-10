@@ -483,4 +483,10 @@
     <string name="device_confirm_title">Змяніць распіноўку?</string>
     <string name="device_confirm_text">Прылада перазапусціцца з новымі вывадамі. Няправільная распіноўка не пашкодзіць налады, але званок можа перастаць працаваць, пакуль яе не выправіць.</string>
     <string name="device_saved">Распіноўка захавана, прылада перазапускаецца</string>
+    <string name="network_tx_power">Магутнасць Wi-Fi</string>
+    <string name="network_tx_power_hint">Меншая магутнасць – меншы ток і далёкасць сувязі</string>
+    <string name="network_tx_power_value">%1$s дБм</string>
+    <string name="network_tx_power_default">%1$s дБм (па змаўчанні)</string>
+    <string name="network_tx_power_dialog_hint">Калі плата перазапускаецца або завісае з-за прасадак сілкавання, паспрабуйце 11–15 дБм. Занадта нізкая магутнасць скарачае далёкасць: тэлефон давядзецца трымаць бліжэй да прылады.</string>
+    <string name="network_confirm_tx_power">Новая магутнасць пачне дзейнічаць адразу, без перазапуску кропкі доступу. Калі сувязь знікне, падыдзіце бліжэй да прылады і падыміце магутнасць.</string>
 </resources>

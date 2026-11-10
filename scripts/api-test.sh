@@ -369,13 +369,24 @@ code="$(request POST /network '{}' "${WORK_DIR}/network_noop.json")"
 expect_code 200 "${code}" "POST /network without changes" "${WORK_DIR}/network_noop.json"
 expect_contains "${WORK_DIR}/network_noop.json" '"restart":false' "unchanged network does not restart"
 
-for bad in '{"ssid":""}:invalid_ssid' '{"password":"short"}:invalid_password' '{"token":"has space"}:invalid_token'; do
+for bad in '{"ssid":""}:invalid_ssid' '{"password":"short"}:invalid_password' '{"token":"has space"}:invalid_token' \
+           '{"tx_power":12}:invalid_tx_power' '{"tx_power":"max"}:invalid_tx_power'; do
     body="${bad%:*}"
     error="${bad##*:}"
     code="$(request POST /network "${body}" "${WORK_DIR}/network_bad.json")"
     expect_code 400 "${code}" "POST /network rejects ${body}" "${WORK_DIR}/network_bad.json"
     expect_contains "${WORK_DIR}/network_bad.json" "\"error\":\"${error}\"" "${error} error code"
 done
+
+# The transmit power changes at once, without restarting the access point.
+expect_contains "${WORK_DIR}/network.json" '"tx_power"' "network reports the transmit power"
+tx_before="$(sed -n 's/.*"tx_power":\([0-9.]*\).*/\1/p' "${WORK_DIR}/network.json")"
+code="$(request POST /network '{"tx_power":15}' "${WORK_DIR}/network_tx.json")"
+expect_code 200 "${code}" "POST /network sets tx_power" "${WORK_DIR}/network_tx.json"
+expect_contains "${WORK_DIR}/network_tx.json" '"tx_power":15' "new transmit power is reported"
+expect_contains "${WORK_DIR}/network_tx.json" '"restart":false' "transmit power does not restart the access point"
+code="$(request POST /network "{\"tx_power\":${tx_before:-20}}" "${WORK_DIR}/network_tx.json")"
+expect_code 200 "${code}" "POST /network restores tx_power" "${WORK_DIR}/network_tx.json"
 
 # --- HTML page and 404 ----------------------------------------------------
 code="$(request GET / "" "${WORK_DIR}/index.html")"

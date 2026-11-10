@@ -475,4 +475,10 @@
     <string name="device_confirm_title">Change the wiring?</string>
     <string name="device_confirm_text">The device restarts with the new pins. Wrong wiring does not harm the settings, but the bell may stop working until it is fixed.</string>
     <string name="device_saved">Wiring saved, the device restarts</string>
+    <string name="network_tx_power">Wi-Fi power</string>
+    <string name="network_tx_power_hint">Lower power means less current and a shorter range</string>
+    <string name="network_tx_power_value">%1$s dBm</string>
+    <string name="network_tx_power_default">%1$s dBm (default)</string>
+    <string name="network_tx_power_dialog_hint">If the board restarts or freezes because its supply sags, try 11–15 dBm. A very low power shortens the range: keep the phone closer to the device.</string>
+    <string name="network_confirm_tx_power">The new power applies at once, without restarting the access point. If the connection drops, move closer to the device and raise the power.</string>
 </resources>

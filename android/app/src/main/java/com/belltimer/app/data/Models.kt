@@ -28,6 +28,9 @@ const val API_MODULES = 5
  */
 const val API_UPDATES = 6
 
+/** Device API level with the transmit power of the access point. */
+const val API_TX_POWER = 7
+
 /**
  * Oldest firmware this app can drive. The release workflow copies it into
  * app.json, so an app update is not suggested to a phone whose device runs
@@ -69,14 +72,15 @@ data class DeviceStatus(
     val ssid: String? = null,
     /** Oldest app the firmware supports; null on firmware before API 6. */
     val minApp: String? = null,
-    /** Seconds since the device started; null on firmware before 2.1.2. */
+    /** Seconds since the device started; null on firmware before 2.2.0. */
     val uptime: Long? = null,
-    /** Why the device last started ("brownout", "task_wdt", ...); null on firmware before 2.1.2. */
+    /** Why the device last started ("brownout", "task_wdt", ...); null on firmware before 2.2.0. */
     val resetReason: String? = null,
 ) {
     val isAuto: Boolean get() = mode == "auto"
     val supportsModules: Boolean get() = api >= API_MODULES
     val supportsUpdates: Boolean get() = api >= API_UPDATES
+    val supportsTxPower: Boolean get() = api >= API_TX_POWER
 }
 
 /**
@@ -232,7 +236,18 @@ data class NetworkDto(
     @SerialName("local_only") val localOnly: Boolean? = null,
     /** A local-only switch waits for a client to come back before it is stored. */
     @SerialName("local_only_trial") val localOnlyTrial: Boolean = false,
-)
+    /** Transmit power in dBm; null on firmware before API 7. */
+    @SerialName("tx_power") val txPower: Double? = null,
+) {
+    companion object {
+        /** Levels the firmware accepts, strongest first. Mirrors TX_POWER_LEVELS in the firmware. */
+        val TX_POWER_LEVELS: List<Double> =
+            listOf(20.0, 19.5, 19.0, 18.5, 17.0, 15.0, 13.0, 11.0, 8.5, 7.0, 5.0, 2.0)
+
+        /** The chip default, used by firmware that never stored a power. */
+        const val DEFAULT_TX_POWER = 20.0
+    }
+}
 
 /** Only the fields that are not null are changed on the device. */
 @Serializable
@@ -241,6 +256,7 @@ data class NetworkUpdateDto(
     val password: String? = null,
     val token: String? = null,
     @SerialName("local_only") val localOnly: Boolean? = null,
+    @SerialName("tx_power") val txPower: Double? = null,
 )
 
 /** GPIO wiring stored on the device (API 6). */
@@ -288,6 +304,7 @@ data class ApiResponse(
     val ssid: String? = null,
     @SerialName("local_only") val localOnly: Boolean? = null,
     @SerialName("local_only_trial") val localOnlyTrial: Boolean? = null,
+    @SerialName("tx_power") val txPower: Double? = null,
 )
 
 // ------------------------------- Mapping -----------------------------------
