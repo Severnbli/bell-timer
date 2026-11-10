@@ -631,11 +631,24 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      * Changes the access point and the token on the device. A null [password]
      * or [token] keeps the current value; an empty one makes the network open
      * or turns the token off. When the token changes, the app switches to it
-     * right away so it keeps access.
+     * right away so it keeps access. A null [localOnly] or [txPower] keeps the
+     * current mode or transmit power.
      */
-    fun saveNetwork(ssid: String, password: String?, token: String?, localOnly: Boolean? = null) = action {
+    fun saveNetwork(
+        ssid: String,
+        password: String?,
+        token: String?,
+        localOnly: Boolean? = null,
+        txPower: Double? = null,
+    ) = action {
         val response = api.saveNetwork(
-            NetworkUpdateDto(ssid = ssid.trim(), password = password, token = token, localOnly = localOnly),
+            NetworkUpdateDto(
+                ssid = ssid.trim(),
+                password = password,
+                token = token,
+                localOnly = localOnly,
+                txPower = txPower,
+            ),
         )
         if (!response.ok) throw ApiException.Http(400, response.error ?: "invalid_request")
         if (token != null) {
@@ -653,6 +666,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     tokenSet = if (token != null) token.isNotEmpty() else it.network.tokenSet,
                     localOnly = response.localOnly ?: it.network.localOnly,
                     localOnlyTrial = response.localOnlyTrial ?: it.network.localOnlyTrial,
+                    txPower = response.txPower ?: txPower ?: it.network.txPower,
                 ),
                 message = when {
                     restart && response.localOnlyTrial == true ->

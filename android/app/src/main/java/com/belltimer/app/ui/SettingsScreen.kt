@@ -74,6 +74,7 @@ import com.belltimer.app.InstallPhase
 import com.belltimer.app.R
 import com.belltimer.app.UiState
 import com.belltimer.app.data.DeviceConfigDto
+import com.belltimer.app.data.NetworkDto
 import com.belltimer.app.data.MAX_RING_SECONDS
 import com.belltimer.app.data.MIN_RING_SECONDS
 import com.belltimer.app.data.isNewer
@@ -378,8 +379,9 @@ private fun ResetDialog(onConfirm: (Boolean) -> Unit, onDismiss: () -> Unit) {
 
 /** Access point name, password and API token stored on the device. */
 @Composable
-private fun NetworkCard(state: UiState, onSave: (String, String?, String?, Boolean?) -> Unit) {
+private fun NetworkCard(state: UiState, onSave: (String, String?, String?, Boolean?, Double?) -> Unit) {
     val network = state.network ?: return
+    val currentTxPower = network.txPower.takeIf { state.status?.supportsTxPower == true }
     var ssid by rememberSaveable(network.ssid) { mutableStateOf(network.ssid) }
     var password by rememberSaveable { mutableStateOf("") }
     var open by rememberSaveable(network.open) { mutableStateOf(network.open) }
@@ -387,6 +389,8 @@ private fun NetworkCard(state: UiState, onSave: (String, String?, String?, Boole
     var token by rememberSaveable { mutableStateOf("") }
     var noToken by rememberSaveable(network.tokenSet) { mutableStateOf(!network.tokenSet) }
     var localOnly by rememberSaveable(network.localOnly) { mutableStateOf(network.localOnly == true) }
+    var txPower by rememberSaveable(currentTxPower) { mutableStateOf(currentTxPower) }
+    var pickTxPower by remember { mutableStateOf(false) }
     var confirm by remember { mutableStateOf(false) }
 
     val ssidError = ssid.isBlank() || ssid.toByteArray(Charsets.UTF_8).size > 32
@@ -408,7 +412,8 @@ private fun NetworkCard(state: UiState, onSave: (String, String?, String?, Boole
     }
     val ssidChanged = ssid.trim() != network.ssid
     val newLocalOnly = localOnly.takeIf { network.localOnly != null && it != network.localOnly }
-    val changed = ssidChanged || newPassword != null || newToken != null || newLocalOnly != null
+    val newTxPower = txPower.takeIf { currentTxPower != null && it != currentTxPower }
+    val changed = ssidChanged || newPassword != null || newToken != null || newLocalOnly != null || newTxPower != null
     val valid = !ssidError && !passwordError && !passwordMissing && !tokenError && !tokenMissing
 
     AppCard {
@@ -478,6 +483,22 @@ private fun NetworkCard(state: UiState, onSave: (String, String?, String?, Boole
                 trailing = { Switch(checked = localOnly, onCheckedChange = { localOnly = it }) },
             )
         }
+        val shownTxPower = txPower
+        if (shownTxPower != null) {
+            ThinDivider()
+            SettingRow(
+                title = stringResource(R.string.network_tx_power),
+                subtitle = stringResource(R.string.network_tx_power_hint),
+                onClick = { pickTxPower = true },
+                trailing = {
+                    Text(
+                        stringResource(R.string.network_tx_power_value, formatDbm(shownTxPower)),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                },
+            )
+        }
         ThinDivider()
         SettingRow(
             title = stringResource(R.string.network_no_token),
@@ -514,17 +535,82 @@ private fun NetworkCard(state: UiState, onSave: (String, String?, String?, Boole
             text = when {
                 newLocalOnly != null -> stringResource(R.string.network_confirm_local_only, ssid.trim())
                 restart -> stringResource(R.string.network_confirm_restart, ssid.trim())
-                else -> stringResource(R.string.network_confirm_token)
+                newToken != null -> stringResource(R.string.network_confirm_token)
+                else -> stringResource(R.string.network_confirm_tx_power)
             },
             confirm = stringResource(R.string.network_apply),
             onConfirm = {
-                onSave(ssid.trim(), newPassword, newToken, newLocalOnly)
+                onSave(ssid.trim(), newPassword, newToken, newLocalOnly, newTxPower)
                 password = ""
                 token = ""
             },
             onDismiss = { confirm = false },
         )
     }
+
+    val pickedTxPower = txPower
+    if (pickTxPower && pickedTxPower != null) {
+        TxPowerDialog(
+            selected = pickedTxPower,
+            onSelect = {
+                txPower = it
+                pickTxPower = false
+            },
+            onDismiss = { pickTxPower = false },
+        )
+    }
+}
+
+/** Picks one of the transmit power levels the firmware accepts. */
+@Composable
+private fun TxPowerDialog(selected: Double, onSelect: (Double) -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.network_tx_power)) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .selectableGroup()
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                Text(
+                    stringResource(R.string.network_tx_power_dialog_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                for (level in NetworkDto.TX_POWER_LEVELS) {
+                    val isSelected = level == selected
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .selectable(selected = isSelected, role = Role.RadioButton) { onSelect(level) },
+                    ) {
+                        RadioButton(selected = isSelected, onClick = null)
+                        Spacer(Modifier.width(16.dp))
+                        Text(
+                            if (level == NetworkDto.DEFAULT_TX_POWER) {
+                                stringResource(R.string.network_tx_power_default, formatDbm(level))
+                            } else {
+                                stringResource(R.string.network_tx_power_value, formatDbm(level))
+                            },
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+    )
+}
+
+/** 20 dBm as "20", 8.5 dBm as "8.5" or "8,5", depending on the language. */
+@Composable
+private fun formatDbm(value: Double): String {
+    val locale = LocalConfiguration.current.locales[0]
+    return if (value % 1.0 == 0.0) value.toInt().toString() else String.format(locale, "%.1f", value)
 }
 
 /** Versions of the app and the device, their updates and installing firmware. */

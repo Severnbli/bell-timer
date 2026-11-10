@@ -487,4 +487,10 @@
     <string name="device_confirm_title">Изменить распиновку?</string>
     <string name="device_confirm_text">Устройство перезапустится с новыми выводами. Неверная распиновка не повредит настройки, но звонок может перестать работать, пока её не исправить.</string>
     <string name="device_saved">Распиновка сохранена, устройство перезапускается</string>
+    <string name="network_tx_power">Мощность Wi-Fi</string>
+    <string name="network_tx_power_hint">Ниже мощность – меньше ток и дальность связи</string>
+    <string name="network_tx_power_value">%1$s дБм</string>
+    <string name="network_tx_power_default">%1$s дБм (по умолчанию)</string>
+    <string name="network_tx_power_dialog_hint">Если плата перезагружается или зависает из-за просадок питания, попробуйте 11–15 дБм. Слишком низкая мощность сокращает дальность: телефон придётся держать ближе к устройству.</string>
+    <string name="network_confirm_tx_power">Новая мощность начнёт действовать сразу, без перезапуска точки доступа. Если связь пропадёт, подойдите ближе к устройству и поднимите мощность.</string>
 </resources>
