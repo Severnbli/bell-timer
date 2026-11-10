@@ -1,9 +1,9 @@
-# BellTimer HTTP API (API 6, schedule version 6)
+# BellTimer HTTP API (API 7, schedule version 6)
 
 This document is the contract between the Android app (`android/`, package
 `com.belltimer.app`) and the device firmware (`firmware/BellTimer/BellTimer.ino`).
 
-Firmware `2.1.0` implements everything below and reports `"api": 6`.
+Firmware `2.2.0` implements everything below and reports `"api": 7`.
 
 ## Basics
 
@@ -24,15 +24,17 @@ Firmware `2.1.0` implements everything below and reports `"api": 6`.
 
 ## Compatibility
 
-| | Firmware 2.0.0 (API 5) | Firmware 2.1.0 (API 6) |
-| --- | --- | --- |
-| Schedule written | v5 | v6 (one range stays in the v5 shape) |
-| Schedule accepted | v4, v5 | v4, v5, v6 |
-| Several ranges per pack | no: `ranges` is ignored | yes |
-| Firmware update over Wi-Fi | no | `POST /update` |
-| Wiring at run time | no | `GET/POST /device` |
-| Local-only access point | no | `local_only` in `/network` |
-| `min_app` in `/status` | no | yes |
+| | Firmware 2.0.0 (API 5) | Firmware 2.1.0 (API 6) | Firmware 2.2.0 (API 7) |
+| --- | --- | --- | --- |
+| Schedule written | v5 | v6 (one range stays in the v5 shape) | v6 |
+| Schedule accepted | v4, v5 | v4, v5, v6 | v4, v5, v6 |
+| Several ranges per pack | no: `ranges` is ignored | yes | yes |
+| Firmware update over Wi-Fi | no | `POST /update` | `POST /update` |
+| Wiring at run time | no | `GET/POST /device` | `GET/POST /device` |
+| Local-only access point | no | `local_only` in `/network` | `local_only` in `/network` |
+| `min_app` in `/status` | no | yes | yes |
+| Transmit power | no | no | `tx_power` in `/network` |
+| `uptime`, `reset` in `/status` | no | no | yes |
 
 Version dependencies:
 
@@ -83,8 +85,8 @@ Version dependencies:
            "type": "lesson", "role": "end"},
   "auto": {"start": "2026-09-01", "stop": "2027-05-31"},
   "errors": [],
-  "fw": "2.1.0",
-  "api": 6,
+  "fw": "2.2.0",
+  "api": 7,
   "min_app": "1.5.0",
   "ssid": "BellTimer",
   "uptime": 86400,
@@ -127,7 +129,8 @@ response, which says `"restart": true`.
 
 ```json
 {"ssid": "BellTimer", "channel": 6, "max_clients": 4, "open": false,
- "token_set": true, "local_only": false, "local_only_trial": false}
+ "token_set": true, "local_only": false, "local_only_trial": false,
+ "tx_power": 20}
 ```
 
 The password and the token are never returned. `POST` takes any of:
@@ -139,8 +142,13 @@ The password and the token are never returned. `POST` takes any of:
 * `channel`: 1–13. `max_clients`: 1–8.
 * `local_only`: `true` makes the DHCP server announce no gateway. Phones then
   treat the network as local and keep using mobile data for the internet.
+* `tx_power`: transmit power of the access point in dBm, one of 20, 19.5, 19,
+  18.5, 17, 15, 13, 11, 8.5, 7, 5, 2. The default 20 is the chip default. A
+  lower power draws less current at every packet, which helps a board whose
+  supply sags (for example `brownout` restarts), at the cost of range.
 
-Any change except the token restarts the access point 1.5 s after the
+A new `tx_power` applies at once, clients stay joined. Any change except the
+token and `tx_power` restarts the access point 1.5 s after the
 response (`"restart": true`). A change of `local_only` is a **trial**: it is
 stored only when an authorised request arrives on the restarted network. If no
 request comes within 3 minutes, the device returns to the previous mode by
@@ -150,7 +158,7 @@ trial runs.
 
 Errors: `invalid_ssid`, `invalid_password`, `invalid_token`,
 `invalid_channel`, `invalid_max_clients`, `invalid_local_only`,
-`500 storage_error`.
+`invalid_tx_power`, `500 storage_error`.
 
 ### `GET /device` and `POST /device`
 
@@ -340,7 +348,7 @@ was set. This mirrors `BellSchedule.resolveDay(date)` in
 | `too_many_pack_ranges` / `too_many_pack_dates` | More than 8 ranges / 24 dates in one pack |
 | `invalid_date` | `/schedule/day` without a valid `date` |
 | `invalid_sec`, `invalid_mode`, `invalid_datetime`, `invalid_ring_default` | value out of range |
-| `invalid_ssid`, `invalid_password`, `invalid_token`, `invalid_channel`, `invalid_max_clients`, `invalid_local_only` | `POST /network` value out of range |
+| `invalid_ssid`, `invalid_password`, `invalid_token`, `invalid_channel`, `invalid_max_clients`, `invalid_local_only`, `invalid_tx_power` | `POST /network` value out of range |
 | `invalid_pins` | `POST /device` with an unusable or repeated pin |
 | `invalid_request` | `POST /reset` with a malformed body |
 | `json_required` | 415, POST without `Content-Type: application/json` |
@@ -361,7 +369,7 @@ settings file carries `"v": 1`; a newer firmware must keep reading older files.
 | --- | --- | --- |
 | `/schedule.json` | the schedule document | empty schedule |
 | `/settings.json` | `ring_default`, `mode`, `synced` | defaults |
-| `/network.json` | `ssid`, `password`, `token`, `channel`, `max_clients`, `local_only` | created from the build defaults on boot |
+| `/network.json` | `ssid`, `password`, `token`, `channel`, `max_clients`, `local_only`, `tx_power` | created from the build defaults on boot |
 | `/device.json` | pins and `led_active_low` | created from the build defaults on boot |
 
 * Files are written atomically (temp file, then rename).

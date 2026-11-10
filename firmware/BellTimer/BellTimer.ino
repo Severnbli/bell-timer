@@ -34,7 +34,7 @@
 // The release workflow sets the version through FW_VERSION in the environment;
 // local builds fall back to this one.
 #ifndef BELLTIMER_FW_VERSION
-#define BELLTIMER_FW_VERSION "2.1.0"
+#define BELLTIMER_FW_VERSION "2.2.0"
 #endif
 
 namespace {
@@ -50,8 +50,9 @@ const char *const MIN_APP_VERSION = "1.5.0";
 // API level reported by GET /status. Level 5 replaces the raw entries of a
 // pack with typed modules (bell, lesson, series). Level 6 adds firmware
 // updates (POST /update), the wiring settings (/device), the local-only access
-// point and several date ranges per pack.
-const uint8_t API_VERSION = 6;
+// point and several date ranges per pack. Level 7 adds the transmit power of
+// the access point ("tx_power" in /network).
+const uint8_t API_VERSION = 7;
 
 // ----------------------------- Configuration ------------------------------
 
@@ -227,6 +228,12 @@ uint8_t apMaxClients = DEFAULT_AP_MAX_CLIENTS;
 // mobile data for the internet while they are joined to the bell. Off by
 // default; the app turns it on with a trial (see LOCAL_ONLY_TRIAL_MS).
 bool apLocalOnly = false;
+// Transmit power of the access point in quarters of a dBm (a wifi_power_t
+// value). A lower power draws less current at every packet, which helps a
+// board whose supply sags. 20 dBm is the chip default, so files written
+// before this setting keep the old behaviour.
+const int8_t DEFAULT_TX_POWER_QDBM = WIFI_POWER_20dBm;
+int8_t apTxPower = DEFAULT_TX_POWER_QDBM;
 bool networkConfigError = false;  // /network.json exists but cannot be used
 bool apRestartPending = false;
 uint32_t apRestartAtMs = 0;
@@ -1115,6 +1122,40 @@ bool validToken(const String &value) {
 bool validChannel(int value) { return value >= 1 && value <= 13; }
 bool validMaxClients(int value) { return value >= 1 && value <= 8; }
 
+// Levels the ESP32 radio accepts, in quarters of a dBm (wifi_power_t).
+// Mirrored by NetworkDto.TX_POWER_LEVELS in the app.
+const int8_t TX_POWER_LEVELS[] = {
+    WIFI_POWER_20dBm, WIFI_POWER_19_5dBm, WIFI_POWER_19dBm, WIFI_POWER_18_5dBm,
+    WIFI_POWER_17dBm, WIFI_POWER_15dBm,   WIFI_POWER_13dBm, WIFI_POWER_11dBm,
+    WIFI_POWER_8_5dBm, WIFI_POWER_7dBm,   WIFI_POWER_5dBm,  WIFI_POWER_2dBm};
+
+bool validTxPower(int quarterDbm) {
+  for (int8_t level : TX_POWER_LEVELS) {
+    if (level == quarterDbm) return true;
+  }
+  return false;
+}
+
+// The wire format and the file carry dBm ("tx_power": 8.5). Every level is a
+// multiple of 0.25, so the conversion is exact.
+float txPowerDbm(int8_t quarterDbm) { return quarterDbm / 4.0f; }
+
+// Reads a "tx_power" value in dBm. A missing value gives the fallback.
+bool parseTxPowerField(JsonVariant value, int8_t fallback, int8_t &out) {
+  if (value.isNull()) {
+    out = fallback;
+    return true;
+  }
+  if (!value.is<float>() && !value.is<int>()) return false;
+  float dbm = value.as<float>();
+  if (!(dbm >= 0.0f && dbm <= 21.0f)) return false;
+  float quarters = dbm * 4.0f;
+  int rounded = static_cast<int>(lroundf(quarters));
+  if (fabsf(quarters - rounded) > 0.01f || !validTxPower(rounded)) return false;
+  out = static_cast<int8_t>(rounded);
+  return true;
+}
+
 bool saveNetworkToFlash() {
   JsonDocument doc;
   doc["v"] = FILE_FORMAT;
@@ -1125,6 +1166,7 @@ bool saveNetworkToFlash() {
   doc["max_clients"] = apMaxClients;
   // A local-only switch on trial is not stored until a client confirmed it.
   doc["local_only"] = localOnlyTrial ? localOnlyPrevious : apLocalOnly;
+  doc["tx_power"] = txPowerDbm(apTxPower);
   String payload;
   serializeJson(doc, payload);
   return storageOk && writeFileAtomic(NETWORK_FILE, payload);
@@ -1141,6 +1183,7 @@ void loadNetworkFromFlash() {
   apChannel = DEFAULT_AP_CHANNEL;
   apMaxClients = DEFAULT_AP_MAX_CLIENTS;
   apLocalOnly = false;
+  apTxPower = DEFAULT_TX_POWER_QDBM;
   localOnlyTrial = false;
   networkConfigError = false;
   if (!storageOk) return;
@@ -1163,8 +1206,10 @@ void loadNetworkFromFlash() {
   int channel = doc["channel"] | static_cast<int>(DEFAULT_AP_CHANNEL);
   int maxClients = doc["max_clients"] | static_cast<int>(DEFAULT_AP_MAX_CLIENTS);
   bool localOnly = doc["local_only"] | false;
+  int8_t txPower = DEFAULT_TX_POWER_QDBM;
+  bool txPowerOk = parseTxPowerField(doc["tx_power"], DEFAULT_TX_POWER_QDBM, txPower);
   if (!validSsid(ssid) || !validPassword(password) || !validToken(token) ||
-      !validChannel(channel) || !validMaxClients(maxClients)) {
+      !validChannel(channel) || !validMaxClients(maxClients) || !txPowerOk) {
     networkConfigError = true;
     return;
   }
@@ -1174,10 +1219,11 @@ void loadNetworkFromFlash() {
   apChannel = static_cast<uint8_t>(channel);
   apMaxClients = static_cast<uint8_t>(maxClients);
   apLocalOnly = localOnly;
+  apTxPower = txPower;
   // Files without the new fields get them now, so a later firmware built with
   // other defaults cannot change them.
   if (doc["v"].isNull() || doc["channel"].isNull() || doc["max_clients"].isNull() ||
-      doc["local_only"].isNull()) {
+      doc["local_only"].isNull() || doc["tx_power"].isNull()) {
     saveNetworkToFlash();
   }
 }
@@ -1637,6 +1683,13 @@ void applyDhcpRouterOption() {
   esp_netif_dhcps_start(netif);
 }
 
+// Can be called at any time while the access point runs; clients stay joined.
+void applyTxPower() {
+  if (!WiFi.setTxPower(static_cast<wifi_power_t>(apTxPower))) {
+    Serial.printf("Wi-Fi: cannot set tx power %d/4 dBm\n", apTxPower);
+  }
+}
+
 void startAccessPoint() {
   WiFi.mode(WIFI_AP);
   IPAddress ip(192, 168, 4, 1);
@@ -1645,7 +1698,10 @@ void startAccessPoint() {
   WiFi.softAPConfig(ip, gateway, subnet);
   const char *password = apPassword.length() > 0 ? apPassword.c_str() : nullptr;
   apOk = WiFi.softAP(apSsid.c_str(), password, apChannel, 0, apMaxClients);
-  if (apOk) applyDhcpRouterOption();
+  if (apOk) {
+    applyDhcpRouterOption();
+    applyTxPower();
+  }
   apLastRetryMs = millis();
   apLastIpCheckMs = apLastRetryMs;
 }
@@ -2103,6 +2159,7 @@ void handlePostReset() {
     loadNetworkFromFlash();
     restart = apSsid != oldSsid || apPassword != oldPassword || apChannel != oldChannel ||
               apMaxClients != oldMaxClients || apLocalOnly != oldLocalOnly;
+    if (!restart && apOk) applyTxPower();
   }
   if (restart) scheduleApRestart();
   loadSettingsFromFlash();
@@ -2131,11 +2188,13 @@ void handleGetNetwork() {
   doc["token_set"] = apiToken.length() > 0;
   doc["local_only"] = apLocalOnly;
   doc["local_only_trial"] = localOnlyTrial;
+  doc["tx_power"] = txPowerDbm(apTxPower);
   sendDocument(200, doc);
 }
 
 // Changes the access point name, its password, channel, client limit,
-// local-only mode and the API token. Every field is optional; "password": ""
+// local-only mode, transmit power and the API token. A new transmit power
+// applies at once, without a restart of the access point. Every field is optional; "password": ""
 // makes the network open and "token": "" turns authentication off. The access
 // point restarts shortly after the response when anything but the token
 // changed. A change of "local_only" is a trial: it is stored only once a
@@ -2202,11 +2261,17 @@ void handlePostNetwork() {
     sendError(400, "invalid_local_only");
     return;
   }
+  int8_t txPower = apTxPower;
+  if (!parseTxPowerField(doc["tx_power"], apTxPower, txPower)) {
+    sendError(400, "invalid_tx_power");
+    return;
+  }
 
   bool localOnlyChanged = localOnly != apLocalOnly;
   bool restart = ssid != apSsid || password != apPassword || channel != apChannel ||
                  maxClients != apMaxClients || localOnlyChanged;
-  bool changed = restart || token != apiToken;
+  bool txPowerChanged = txPower != apTxPower;
+  bool changed = restart || token != apiToken || txPowerChanged;
   if (changed) {
     String oldSsid = apSsid;
     String oldPassword = apPassword;
@@ -2214,6 +2279,7 @@ void handlePostNetwork() {
     uint8_t oldChannel = apChannel;
     uint8_t oldMaxClients = apMaxClients;
     bool oldLocalOnly = apLocalOnly;
+    int8_t oldTxPower = apTxPower;
     bool oldTrial = localOnlyTrial;
     bool oldPrevious = localOnlyPrevious;
     if (localOnlyChanged) {
@@ -2227,6 +2293,7 @@ void handlePostNetwork() {
     apChannel = static_cast<uint8_t>(channel);
     apMaxClients = static_cast<uint8_t>(maxClients);
     apLocalOnly = localOnly;
+    apTxPower = txPower;
     if (!saveNetworkToFlash()) {
       apSsid = oldSsid;
       apPassword = oldPassword;
@@ -2234,13 +2301,18 @@ void handlePostNetwork() {
       apChannel = oldChannel;
       apMaxClients = oldMaxClients;
       apLocalOnly = oldLocalOnly;
+      apTxPower = oldTxPower;
       localOnlyTrial = oldTrial;
       localOnlyPrevious = oldPrevious;
       sendError(500, "storage_error");
       return;
     }
   }
-  if (restart) scheduleApRestart();
+  if (restart) {
+    scheduleApRestart();
+  } else if (txPowerChanged && apOk) {
+    applyTxPower();
+  }
 
   JsonDocument out;
   out["ok"] = true;
@@ -2248,6 +2320,7 @@ void handlePostNetwork() {
   out["restart"] = restart;
   out["local_only"] = apLocalOnly;
   out["local_only_trial"] = localOnlyTrial;
+  out["tx_power"] = txPowerDbm(apTxPower);
   sendDocument(200, out);
 }
 
