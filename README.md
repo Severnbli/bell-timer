@@ -207,7 +207,9 @@ Requirements: `arduino-cli`, the ESP32 core **3.3.12**, RTClib 2.1.4 and
 ArduinoJson 7.4.3.
 
 ```bash
-arduino-cli core install esp32:esp32@3.3.12
+esp32_index=https://espressif.github.io/arduino-esp32/package_esp32_index.json
+arduino-cli core update-index --additional-urls "$esp32_index"
+arduino-cli core install esp32:esp32@3.3.12 --additional-urls "$esp32_index"
 arduino-cli lib install "RTClib@2.1.4" "ArduinoJson@7.4.3"
 
 cp .env.example .env          # Wi-Fi name, password, token, pins
@@ -260,7 +262,9 @@ scripts/api-test.sh                          # default address, no token
 X_TOKEN=secret scripts/api-test.sh http://192.168.4.1
 ```
 
-It tests every endpoint, then restores the schedule, mode and ring duration.
+Run this on a test device. It rings the bell, sets the RTC and exercises the
+reset endpoint, which clears the last sync record. The script attempts to
+restore the schedule, mode and ring duration when it exits.
 
 ## Releases
 
