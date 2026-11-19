@@ -76,6 +76,9 @@ needed.
   → Wiring) without rebuilding the firmware.
 - Most optocoupler relay modules switch reliably from a 3.3 V input with a 5 V
   supply. If yours does not, use a module made for 3.3 V logic.
+- The ESP32 sometimes froze when the relay switched off. Unplugging the power
+  supply and plugging it back in was the only way to recover. Adding a
+  snubber fixed the problem.
 - **Mains voltage:** if the bell runs on 230 V, have the relay side wired by
   a qualified person, in a closed enclosure, with the contacts rated for the
   bell's current.
@@ -207,7 +210,9 @@ Requirements: `arduino-cli`, the ESP32 core **3.3.12**, RTClib 2.1.4 and
 ArduinoJson 7.4.3.
 
 ```bash
-arduino-cli core install esp32:esp32@3.3.12
+esp32_index=https://espressif.github.io/arduino-esp32/package_esp32_index.json
+arduino-cli core update-index --additional-urls "$esp32_index"
+arduino-cli core install esp32:esp32@3.3.12 --additional-urls "$esp32_index"
 arduino-cli lib install "RTClib@2.1.4" "ArduinoJson@7.4.3"
 
 cp .env.example .env          # Wi-Fi name, password, token, pins
@@ -260,7 +265,9 @@ scripts/api-test.sh                          # default address, no token
 X_TOKEN=secret scripts/api-test.sh http://192.168.4.1
 ```
 
-It tests every endpoint, then restores the schedule, mode and ring duration.
+Run this on a test device. It rings the bell, sets the RTC and exercises the
+reset endpoint, which clears the last sync record. The script attempts to
+restore the schedule, mode and ring duration when it exits.
 
 ## Releases
 
