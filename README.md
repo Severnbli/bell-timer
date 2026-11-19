@@ -43,6 +43,16 @@ needed.
 
 ## Wiring
 
+> [!IMPORTANT]
+> **Fit a snubber in the relay circuit.**
+>
+> In the tested setup, the ESP32 sometimes froze when the relay switched off.
+> Unplugging the power supply and plugging it back in was the only way to
+> recover. The freezes stopped after we wired a [Gereiny snubber][relay-snubber]
+> in parallel with the relay.
+
+[relay-snubber]: https://www.amazon.es/Gereiny-Absorci%C3%B3n-Protecci%C3%B3n-Resistencia-Sobretensi%C3%B3n/dp/B0B74CRJDF
+
 ```
                          ESP32 DevKit
                      ┌──────────────────┐
@@ -76,9 +86,6 @@ needed.
   → Wiring) without rebuilding the firmware.
 - Most optocoupler relay modules switch reliably from a 3.3 V input with a 5 V
   supply. If yours does not, use a module made for 3.3 V logic.
-- The ESP32 sometimes froze when the relay switched off. Unplugging the power
-  supply and plugging it back in was the only way to recover. Adding a
-  snubber fixed the problem.
 - **Mains voltage:** if the bell runs on 230 V, have the relay side wired by
   a qualified person, in a closed enclosure, with the contacts rated for the
   bell's current.
